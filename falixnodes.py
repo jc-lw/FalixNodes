@@ -36,14 +36,6 @@ class FalixNodesRenewal:
         timestamp = time.strftime('%H:%M:%S')
         print(f"[{timestamp}] [INFO] {msg}", flush=True)
 
-    def move_mouse_human(self, sb):
-        """模拟人类鼠标晃动预热"""
-        try:
-            for _ in range(3):
-                sb.slow_click(f"body", force=True)
-                time.sleep(random.uniform(0.5, 1.2))
-        except: pass
-
     def send_telegram_notify(self, message, photo_path=None):
         if not TG_TOKEN or not TG_CHAT_ID:
             self.log("⚠️ 未配置 TG_TOKEN，跳过推送喵。")
@@ -60,9 +52,21 @@ class FalixNodesRenewal:
         except Exception as e:
             self.log(f"❌ TG 推送失败: {e}")
 
+    def is_cf_passed(self, sb) -> bool:
+        """严格检查页面上是否真的生成了有效 Token"""
+        try:
+            # 获取所有 CF response 框，只要有一个有值就算通过
+            elements = sb.find_elements('input[name="cf-turnstile-response"]')
+            for el in elements:
+                val = el.get_attribute("value")
+                if val and len(val) > 20:
+                    return True
+        except: pass
+        return False
+
     def run(self):
         self.log("=" * 40)
-        self.log("🚀 FalixNodes - kof96zip死磕链接版 (只过CF,无广告)喵")
+        self.log("🚀 FalixNodes - 终极死磕链接版 (反广告遮挡+严格打勾)喵")
         self.log("=" * 40)
         
         with SB(
@@ -77,7 +81,7 @@ class FalixNodesRenewal:
             try:
                 self.log("✅ 浏览器已启动！")
                 
-                # 1. IP 检测 (保留 kof96zip 原有功能)
+                # 1. IP 检测
                 self.log("🌍 正在检测出口 IP...")
                 try:
                     sb.open("https://api.ipify.org?format=json")
@@ -88,67 +92,72 @@ class FalixNodesRenewal:
                     self.log("⚠️ IP 检测跳过...")
                 
                 # 2. 强制访问配置的链接
-                self.log(f"🔗 强制访问唯一目标链接...")
+                self.log(f"🔗 强制访问唯一目标链接: {TAGET}")
                 sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
-                time.sleep(6) # 多等一会，防止网页响应慢
+                time.sleep(6)
+                
+                # 🚨 核心风控拦截检测 🚨
+                current_url = sb.get_current_url()
+                if "login" in current_url:
+                    self.log("❌ 糟糕！FalixNodes 把我们强制踢到登录页了！")
+                    login_screenshot = f"{self.screenshot_dir}/login_redirect.png"
+                    sb.save_screenshot(login_screenshot)
+                    self.send_telegram_notify(
+                        f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：当前代理 IP 被官方风控，强制要求登录！建议更换 Github Action 节点或代理 IP 喵！", 
+                        login_screenshot
+                    )
+                    return # 立刻停止，绝不执行登录逻辑
 
-                # 3. 优先寻找并死磕 Cloudflare (完美融入 oyz8 逻辑)
+                # 3. 死磕 Cloudflare 验证码
                 self.log("⏳ 正在死磕 Cloudflare 验证码喵...")
-                for attempt in range(12): # 最多循环等待约 40 秒
-                    token_ok = False
-                    try:
-                        token_ok = sb.execute_script("""
-                            var inp = document.querySelector("input[name='cf-turnstile-response']");
-                            return inp && inp.value && inp.value.length > 20;
-                        """)
-                    except: pass
-                    
-                    if token_ok:
-                        self.log("✅ CF 已经绿勾通过啦！")
+                for attempt in range(15): # 增加等待轮次，最长等45秒
+                    if self.is_cf_passed(sb):
+                        self.log("✅ 确认无误：CF 已经真实绿勾通过啦！")
                         break
-                        
-                    # 多重点击策略
-                    self.move_mouse_human(sb)
-                    try: sb.uc_gui_click_captcha()
-                    except: pass
                     
+                    # 尝试点击
                     try:
-                        sb.switch_to_frame("iframe[src*='challenges.cloudflare']")
-                        sb.click("input[type='checkbox'], .cb-lb", timeout=2)
-                        sb.switch_to_default_content()
-                    except:
-                        try: sb.switch_to_default_content()
-                        except: pass
+                        sb.slow_click(f"body", force=True) # 晃晃鼠标
+                        sb.uc_gui_click_captcha()
+                    except: pass
                     
                     time.sleep(3)
+                
+                if not self.is_cf_passed(sb):
+                    self.log("❌ CF 验证码一直过不去（可能没加载出来或被盾了）喵！")
+                    fail_screenshot = f"{self.screenshot_dir}/cf_fail.png"
+                    sb.save_screenshot(fail_screenshot)
+                    self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 打勾超时！", fail_screenshot)
+                    return
 
-                # 4. CF 过完后，再检查时间元素是否在页面上
+                # 4. 获取当前时间
                 if sb.is_element_present("#timer-page-countdown"):
                     before = sb.get_text("#timer-page-countdown") 
                     self.log(f"🕒 当前剩余时间: {before}")
                 else:
-                    check_screenshot = f"{self.screenshot_dir}/check.png"
-                    sb.save_screenshot(check_screenshot)
-                    self.send_telegram_notify(f"🎉FalixNodes 保活程序\n🖥️编号: {NUM}\n❌找不到时间！如果截图是登录页，说明你的IP被官方强制重定向了喵！", check_screenshot)
-                    return
+                    self.log("⚠️ 找不到时间标签喵？")
+                    before = "未知"
 
-                # 5. 纯净点击加时按钮
+                # 5. 纯净 JS 点击加时按钮 (无视任何广告遮挡)
                 self.log("🖱️ 准备点击添加时间 (Addtime)...")
                 try:
-                    sb.wait_for_element_visible("#timer-page-btn", timeout=10)
-                    sb.click("#timer-page-btn")
-                    self.log("✅ 成功点击添加时间完毕喵！")
+                    # 使用 execute_script 强制点击，就算上面有一万个广告也能点到！
+                    sb.execute_script("""
+                        var btn = document.querySelector("#timer-page-btn");
+                        if(btn) { btn.click(); }
+                    """)
+                    self.log("✅ 成功穿透广告，执行加时点击喵！")
                 except Exception as e:
                     self.log(f"⚠️ 点击添加时间失败: {e}")
                 
                 # 6. 等待服务端处理加时请求
                 self.log("⏳ 正在等待服务器后台加上时间...")
-                time.sleep(10) 
+                time.sleep(12) 
 
                 # 7. 再次刷新目标链接获取最终结果
                 self.log("🔗 再次刷新页面核对最新时间...")
                 sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
-                time.sleep(5)
+                time.sleep(6)
                 after = sb.get_text("#timer-page-countdown") if sb.is_element_present("#timer-page-countdown") else "未知"
 
                 self.log("✅ 全部流程执行完毕")
