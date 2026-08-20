@@ -26,7 +26,6 @@ TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
 
 # ========== 核心 CF 打勾逻辑 ==========
 def _turnstile_token_ready(sb) -> bool:
-    """严格检查页面上是否真的生成了有效 Token"""
     try:
         token_ok = sb.execute_script("""
             var inp = document.querySelector("input[name='cf-turnstile-response']");
@@ -47,17 +46,12 @@ def _turnstile_token_ready(sb) -> bool:
     return False
 
 def _try_click_turnstile(sb) -> bool:
-    """尝试多种方式点击中间的框框"""
-    # 策略 1: oyz8 的原生 uc_gui_click
-    try:
-        sb.uc_gui_click_captcha()
+    try: sb.uc_gui_click_captcha()
     except Exception: pass
 
-    # 策略 2: 强行钻进 iframe 里点那个框 (最有效)
     try:
         if sb.is_element_present("iframe[src*='challenges.cloudflare']"):
             sb.switch_to_frame("iframe[src*='challenges.cloudflare']")
-            # 点击复选框元素
             sb.click("input[type='checkbox'], .cb-lb, .mark", timeout=2)
             sb.switch_to_default_content()
             print("[INFO] 成功戳中 iframe 里的验证码框喵！")
@@ -66,7 +60,6 @@ def _try_click_turnstile(sb) -> bool:
         try: sb.switch_to_default_content()
         except Exception: pass
 
-    # 策略 3: JS 底层触发
     try:
         sb.execute_script("""
             var ts = document.querySelector('.cf-turnstile');
@@ -77,13 +70,9 @@ def _try_click_turnstile(sb) -> bool:
     return False
 
 def wait_turnstile(sb, timeout: int = 60) -> bool:
-    """耐心等待打勾"""
     print("[INFO] 正在耐心等待 Cloudflare 验证码完全加载喵...")
-    
-    # 🚨 关键修复：强制等待 10 秒，绝不提前跳过！让广告和 CF 飞一会儿 🚨
     time.sleep(10)
     
-    # 把验证码滚动到屏幕中间防遮挡
     try:
         sb.execute_script("""
             var ts = document.querySelector('.cf-turnstile') || document.querySelector('iframe[src*="challenges.cloudflare"]');
@@ -97,11 +86,11 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
     while time.time() - start < timeout:
         if _turnstile_token_ready(sb):
             print("[INFO] ✅ Turnstile 绿勾验证完成喵！")
-            time.sleep(1)
+            # 🚨 关键修复1：绿勾后强制等待 3 秒，让后端服务器同步状态！
+            time.sleep(3) 
             return True
 
         now = time.time()
-        # 每隔 4 秒去戳一次那个框框
         if now - last_click >= 4:
             print("[INFO] 尝试戳一下中间的框框...")
             _try_click_turnstile(sb)
@@ -111,7 +100,6 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
 
     return _turnstile_token_ready(sb)
 # ==================================================
-
 
 class FalixNodesRenewal:
     def __init__(self):
@@ -142,7 +130,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - kof96zip (修复跳过BUG + 3次F5重试)喵")
+        self.log("[🚀] FalixNodes - kof96zip (求稳加时版)喵")
         self.log("=" * 40)
         
         with SB(
@@ -157,7 +145,6 @@ class FalixNodesRenewal:
             try:
                 self.log("[✅] 浏览器已启动！")
                 
-                # 1. IP 检测
                 self.log("[🌍] 正在检测出口 IP...")
                 try:
                     sb.open("https://api.ipify.org?format=json")
@@ -167,23 +154,19 @@ class FalixNodesRenewal:
                 except:
                     self.log("[⚠️] IP 检测跳过...")
                 
-                # 2. 访问目标链接
                 self.log(f"[🔗] 强制访问目标链接: {TAGET}")
                 sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
                 time.sleep(6)
                 
-                # 拦截重定向
                 if "login" in sb.get_current_url():
                     login_screenshot = f"{self.screenshot_dir}/login_redirect.png"
                     sb.save_screenshot(login_screenshot)
                     self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 被官方重定向到登录页了，代理IP可能被风控喵！", login_screenshot)
                     return
 
-                # 3. 循环 F5 刷新破解验证码 (最多 3 次)
                 cf_passed = False
                 for attempt in range(1, 4):
                     self.log(f"\n[⏳] 第 {attempt} 次尝试破解 Cloudflare 验证码喵...")
-                    
                     if wait_turnstile(sb, timeout=60):
                         cf_passed = True
                         break
@@ -191,9 +174,8 @@ class FalixNodesRenewal:
                     if attempt < 3:
                         self.log(f"[🔄] 验证码过不去，准备按 F5 刷新页面重试喵！")
                         sb.refresh()
-                        time.sleep(10) # 刷新后多等一会儿
+                        time.sleep(10)
                 
-                # 3次全败
                 if not cf_passed:
                     self.log("[❌] 连续 3 次打勾失败，投降了喵...")
                     fail_screenshot = f"{self.screenshot_dir}/cf_fail.png"
@@ -201,13 +183,18 @@ class FalixNodesRenewal:
                     self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 连续 3 次打勾超时！", fail_screenshot)
                     return
 
-                # 4. 获取当前时间
+                # 🚨 关键修复2：安全获取时间，给 JS 渲染留足时间
                 before = "未知"
-                if sb.is_element_present("#timer-page-countdown"):
-                    before = sb.get_text("#timer-page-countdown") 
+                try:
+                    sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
+                    time.sleep(2) # 等待数字渲染
+                    raw_text = sb.get_text("#timer-page-countdown").strip()
+                    if raw_text:
+                        before = raw_text
                     self.log(f"[🕒] 当前剩余时间: {before}")
+                except Exception:
+                    self.log("[⚠️] 找不到时间标签或为空喵？")
 
-                # 5. 纯净 JS 点击加时按钮 (无视所有广告遮挡)
                 self.log("[🖱️] 准备点击添加时间 (Addtime)...")
                 try:
                     sb.execute_script("""
@@ -218,15 +205,21 @@ class FalixNodesRenewal:
                 except Exception as e:
                     self.log(f"[⚠️] 点击添加时间失败: {e}")
                 
-                # 6. 等待服务端处理加时请求
                 self.log("[⏳] 正在等待服务器后台加上时间...")
                 time.sleep(12) 
 
-                # 7. 再次刷新目标链接获取最终结果
                 self.log("[🔗] 再次刷新页面核对最新时间...")
                 sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
                 time.sleep(6)
-                after = sb.get_text("#timer-page-countdown") if sb.is_element_present("#timer-page-countdown") else "未知"
+                
+                after = "未知"
+                try:
+                    sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
+                    time.sleep(2)
+                    after_raw = sb.get_text("#timer-page-countdown").strip()
+                    if after_raw:
+                        after = after_raw
+                except Exception: pass
 
                 self.log("[✅] 全部流程执行完毕")
                 finish_screenshot = f"{self.screenshot_dir}/finish.png"
