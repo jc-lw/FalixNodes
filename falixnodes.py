@@ -24,15 +24,15 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
 # ===========================================
 
-# ========== 完全复刻 oyz8 的 CF 打勾逻辑 ==========
+# ========== 核心 CF 打勾逻辑 ==========
 def _turnstile_token_ready(sb) -> bool:
+    """严格检查页面上是否真的生成了有效 Token"""
     try:
         token_ok = sb.execute_script("""
             var inp = document.querySelector("input[name='cf-turnstile-response']");
             return inp && inp.value && inp.value.length > 20;
         """)
-        if token_ok:
-            return True
+        if token_ok: return True
     except Exception: pass
 
     try:
@@ -42,65 +42,51 @@ def _turnstile_token_ready(sb) -> bool:
             var style = window.getComputedStyle(s);
             return style.display !== 'none' && style.visibility !== 'hidden';
         """)
-        if success_visible:
-            return True
+        if success_visible: return True
     except Exception: pass
-
     return False
 
-
 def _try_click_turnstile(sb) -> bool:
-    """尝试多种方式点击 Turnstile (oyz8 原版多重攻击)"""
+    """尝试多种方式点击中间的框框"""
+    # 策略 1: oyz8 的原生 uc_gui_click
     try:
         sb.uc_gui_click_captcha()
-        print("[INFO] Turnstile: uc_gui_click_captcha 触发喵")
-        return True
     except Exception: pass
 
+    # 策略 2: 强行钻进 iframe 里点那个框 (最有效)
     try:
-        sb.switch_to_frame("iframe[src*='challenges.cloudflare']")
-        sb.click("input[type='checkbox'], .cb-lb", timeout=3)
-        sb.switch_to_default_content()
-        print("[INFO] Turnstile: iframe 内点击成功喵")
-        return True
-    except Exception:
-        try:
+        if sb.is_element_present("iframe[src*='challenges.cloudflare']"):
+            sb.switch_to_frame("iframe[src*='challenges.cloudflare']")
+            # 点击复选框元素
+            sb.click("input[type='checkbox'], .cb-lb, .mark", timeout=2)
             sb.switch_to_default_content()
+            print("[INFO] 成功戳中 iframe 里的验证码框喵！")
+            return True
+    except Exception:
+        try: sb.switch_to_default_content()
         except Exception: pass
 
+    # 策略 3: JS 底层触发
     try:
         sb.execute_script("""
             var ts = document.querySelector('.cf-turnstile');
             if (ts) ts.click();
         """)
-        print("[INFO] Turnstile: JS 点击 .cf-turnstile")
-        return True
     except Exception: pass
 
     return False
 
-
 def wait_turnstile(sb, timeout: int = 60) -> bool:
-    """等待打勾 (oyz8 原版逻辑)"""
-    try:
-        has = sb.execute_script("""
-            return !!(
-                document.querySelector('.cf-turnstile') ||
-                document.querySelector('iframe[src*="challenges.cloudflare"]') ||
-                document.querySelector('input[name="cf-turnstile-response"]')
-            );
-        """)
-    except Exception:
-        has = False
-
-    if not has:
-        print("[INFO] 无 Turnstile 组件，跳过喵")
-        return True
-
-    # 滚动到验证区 (防止被广告遮挡点不到)
+    """耐心等待打勾"""
+    print("[INFO] 正在耐心等待 Cloudflare 验证码完全加载喵...")
+    
+    # 🚨 关键修复：强制等待 10 秒，绝不提前跳过！让广告和 CF 飞一会儿 🚨
+    time.sleep(10)
+    
+    # 把验证码滚动到屏幕中间防遮挡
     try:
         sb.execute_script("""
-            var ts = document.querySelector('.cf-turnstile');
+            var ts = document.querySelector('.cf-turnstile') || document.querySelector('iframe[src*="challenges.cloudflare"]');
             if (ts) ts.scrollIntoView({block:'center'});
         """)
     except Exception: pass
@@ -110,24 +96,20 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
 
     while time.time() - start < timeout:
         if _turnstile_token_ready(sb):
-            print("[INFO] ✅ Turnstile 验证完成喵")
-            time.sleep(0.5)
+            print("[INFO] ✅ Turnstile 绿勾验证完成喵！")
+            time.sleep(1)
             return True
 
         now = time.time()
-        # 每隔 3 秒尝试点击一次
-        if now - last_click >= 3:
+        # 每隔 4 秒去戳一次那个框框
+        if now - last_click >= 4:
+            print("[INFO] 尝试戳一下中间的框框...")
             _try_click_turnstile(sb)
             last_click = now
 
         time.sleep(1)
 
-    if _turnstile_token_ready(sb):
-        print("[INFO] ✅ Turnstile 超时后仍成功喵")
-        return True
-
-    print("[WARN] ⚠️ Turnstile 等待超时，验证未完成喵")
-    return False
+    return _turnstile_token_ready(sb)
 # ==================================================
 
 
@@ -158,10 +140,9 @@ class FalixNodesRenewal:
         except Exception as e:
             self.log(f"[❌] TG 推送失败: {e}")
 
-
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - kof96zip (F5刷新 + oyz8原味CF)喵")
+        self.log("[🚀] FalixNodes - kof96zip (修复跳过BUG + 3次F5重试)喵")
         self.log("=" * 40)
         
         with SB(
@@ -210,7 +191,7 @@ class FalixNodesRenewal:
                     if attempt < 3:
                         self.log(f"[🔄] 验证码过不去，准备按 F5 刷新页面重试喵！")
                         sb.refresh()
-                        time.sleep(8) # 等待刷新完成
+                        time.sleep(10) # 刷新后多等一会儿
                 
                 # 3次全败
                 if not cf_passed:
