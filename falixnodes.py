@@ -1,208 +1,903 @@
-import time
-import os
 import json
+import os
 import re
-import random
+import time
+import traceback
+
 import requests
-
-# 智能环境配置：仅在未设置时才应用默认值
-# 这样兼容 GitHub Actions 的 xvfb-run (会自动设置 DISPLAY) 和 Docker 环境
-if "DISPLAY" not in os.environ:
-    os.environ["DISPLAY"] = ":1"
-    
-if "XAUTHORITY" not in os.environ:
-    # 仅当路径存在时才设置，避免在 GitHub Runner (home/runner) 中报错
-    if os.path.exists("/home/headless/.Xauthority"):
-        os.environ["XAUTHORITY"] = "/home/headless/.Xauthority"
-
-print(f"[DEBUG] Env DISPLAY: {os.environ.get('DISPLAY')}")
-print(f"[DEBUG] Env XAUTHORITY: {os.environ.get('XAUTHORITY')}")
-
 from seleniumbase import SB
 
-# ================= 配置区域 =================
-PROXY_URL = os.getenv("PROXY", "")  # 代理
-NUM = os.getenv("NUM")  # 服务器编号
-TG_TOKEN = os.getenv("TG_TOKEN")  # tg通知token
-TG_CHAT_ID = os.getenv("TG_CHAT_ID")  # tg通知chat_id
 
-# 目标 URL
-TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
-# ===========================================
+# ============================================================
+# 配置
+# ============================================================
+
+PROXY_URL = os.getenv("PROXY", "").strip()
+NUM = os.getenv("NUM", "").strip()
+
+TG_TOKEN = os.getenv("TG_TOKEN", "").strip()
+TG_CHAT_ID = os.getenv("TG_CHAT_ID", "").strip()
+
+# 等待真实 Turnstile 验证的最长时间
+TURNSTILE_WAIT_SECONDS = int(
+    os.getenv("TURNSTILE_WAIT_SECONDS", "180")
+)
+
+if not NUM:
+    raise RuntimeError("未配置 NUM")
+
+TARGET = f"https://client.falixnodes.net/timer?id={NUM}"
+
+
+# GitHub Actions 的 xvfb-run 会自动设置 DISPLAY
+if "DISPLAY" not in os.environ:
+    os.environ["DISPLAY"] = ":1"
+
+if "XAUTHORITY" not in os.environ:
+    default_xauthority = "/home/headless/.Xauthority"
+
+    if os.path.exists(default_xauthority):
+        os.environ["XAUTHORITY"] = default_xauthority
+
+
+print(
+    f"[DEBUG] Env DISPLAY: {os.environ.get('DISPLAY')}",
+    flush=True,
+)
+
+print(
+    f"[DEBUG] Env XAUTHORITY: {os.environ.get('XAUTHORITY')}",
+    flush=True,
+)
+
+
+# ============================================================
+# 主程序
+# ============================================================
 
 class FalixNodesRenewal:
+
     def __init__(self):
-        self.BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        self.screenshot_dir = os.path.join(self.BASE_DIR, "artifacts")
-        if not os.path.exists(self.screenshot_dir):
-            os.makedirs(self.screenshot_dir)
+        self.base_dir = os.path.dirname(
+            os.path.abspath(__file__)
+        )
 
-    def log(self, msg):
-        timestamp = time.strftime('%H:%M:%S')
-        print(f"[{timestamp}] [INFO] {msg}", flush=True)
+        self.screenshot_dir = os.path.join(
+            self.base_dir,
+            "artifacts",
+        )
 
-    def human_wait(self, min_s=6, max_s=10):
-        """随机模拟人类等待时间"""
-        time.sleep(random.uniform(min_s, max_s))
+        os.makedirs(
+            self.screenshot_dir,
+            exist_ok=True,
+        )
 
-    def move_mouse_human(self, sb):
-        """模拟人类鼠标晃动预热"""
-        try:
-            # 在页面不同位置“晃悠”一下鼠标，打破机器人直线模式
-            for _ in range(3):
-                x = random.randint(100, 800)
-                y = random.randint(100, 600)
-                sb.slow_click(f"body", force=True) # 借用 slow_click 的移动特性，或者直接用 move_to
-                time.sleep(random.uniform(0.5, 1.2))
-        except: pass
+    # --------------------------------------------------------
+    # 日志
+    # --------------------------------------------------------
 
-    def send_telegram_notify(self, message, photo_path=None):
-        """发送 Telegram 通知 (带图片)"""
+    def log(self, message):
+        timestamp = time.strftime("%H:%M:%S")
+
+        print(
+            f"[{timestamp}] [INFO] {message}",
+            flush=True,
+        )
+
+    # --------------------------------------------------------
+    # Telegram
+    # --------------------------------------------------------
+
+    def send_telegram_notify(
+        self,
+        message,
+        photo_path=None,
+    ):
+
         if not TG_TOKEN or not TG_CHAT_ID:
-            self.log("⚠️ 未配置 TG_TOKEN 或 TG_CHAT_ID，跳过推送。")
+            self.log(
+                "⚠️ 未配置 TG_TOKEN / TG_CHAT_ID，跳过 Telegram"
+            )
             return
-        
+
         try:
-            if photo_path and os.path.exists(photo_path):
-                url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
-                with open(photo_path, 'rb') as f:
-                    # caption 参数用于发送带文字的图片
-                    requests.post(url, data={'chat_id': TG_CHAT_ID, 'caption': message}, files={'photo': f})
+
+            if (
+                photo_path
+                and os.path.exists(photo_path)
+            ):
+
+                url = (
+                    f"https://api.telegram.org/"
+                    f"bot{TG_TOKEN}/sendPhoto"
+                )
+
+                with open(photo_path, "rb") as file:
+
+                    response = requests.post(
+                        url,
+                        data={
+                            "chat_id": TG_CHAT_ID,
+                            "caption": message,
+                        },
+                        files={
+                            "photo": file,
+                        },
+                        timeout=20,
+                    )
+
             else:
-                url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-                requests.post(url, data={'chat_id': TG_CHAT_ID, 'text': message})
-            
-            self.log("✅ TG 推送已发送")
-        except Exception as e:
-            self.log(f"❌ TG 推送失败: {e}")
+
+                url = (
+                    f"https://api.telegram.org/"
+                    f"bot{TG_TOKEN}/sendMessage"
+                )
+
+                response = requests.post(
+                    url,
+                    data={
+                        "chat_id": TG_CHAT_ID,
+                        "text": message,
+                    },
+                    timeout=20,
+                )
+
+            response.raise_for_status()
+
+            self.log("✅ Telegram 推送完成")
+
+        except Exception as error:
+
+            self.log(
+                f"⚠️ Telegram 推送失败: {error}"
+            )
+
+    # --------------------------------------------------------
+    # 获取 IP
+    # --------------------------------------------------------
+
+    def check_ip(self, sb):
+
+        self.log("🌍 正在检测出口 IP...")
+
+        try:
+
+            sb.open(
+                "https://api.ipify.org?format=json"
+            )
+
+            text = sb.get_text("body")
+
+            match = re.search(
+                r"\{.*\}",
+                text,
+                re.DOTALL,
+            )
+
+            if not match:
+                raise RuntimeError(
+                    "无法读取 IP API"
+                )
+
+            ip = json.loads(
+                match.group(0)
+            ).get(
+                "ip",
+                "Unknown",
+            )
+
+            parts = ip.split(".")
+
+            if len(parts) == 4:
+
+                masked = (
+                    f"{parts[0]}."
+                    f"{parts[1]}."
+                    f"***."
+                    f"{parts[-1]}"
+                )
+
+            else:
+                masked = ip
+
+            self.log(
+                f"✅ 当前出口 IP: {masked}"
+            )
+
+        except Exception as error:
+
+            self.log(
+                f"⚠️ IP 检测失败，继续运行: {error}"
+            )
+
+    # --------------------------------------------------------
+    # 获取倒计时
+    # --------------------------------------------------------
+
+    def get_countdown(
+        self,
+        sb,
+        timeout=15,
+    ):
+
+        selector = "#timer-page-countdown"
+
+        try:
+
+            sb.wait_for_element_visible(
+                selector,
+                timeout=timeout,
+            )
+
+            text = sb.get_text(
+                selector
+            ).strip()
+
+            return text
+
+        except Exception:
+
+            return None
+
+    # --------------------------------------------------------
+    # Turnstile Token
+    #
+    # 这里只检测正常验证产生的 token。
+    # 不点击、不模拟、不绕过验证码。
+    # --------------------------------------------------------
+
+    def get_turnstile_token(self, sb):
+
+        try:
+
+            token = sb.execute_script(
+                """
+                const el =
+                    document.querySelector(
+                        'input[name="cf-turnstile-response"]'
+                    );
+
+                return el ? (el.value || '') : '';
+                """
+            )
+
+            return token or ""
+
+        except Exception:
+
+            return ""
+
+    def wait_for_turnstile(self, sb):
+
+        token = self.get_turnstile_token(sb)
+
+        if token:
+
+            self.log(
+                "✅ Turnstile 已完成"
+            )
+
+            return token
+
+        screenshot = os.path.join(
+            self.screenshot_dir,
+            "waiting_turnstile.png",
+        )
+
+        sb.save_screenshot(
+            screenshot
+        )
+
+        self.log(
+            "⏳ 等待真实 Turnstile 验证..."
+        )
+
+        self.send_telegram_notify(
+            (
+                "⏳ FalixNodes 等待真人验证\n"
+                f"🖥️ 编号: {NUM}"
+            ),
+            screenshot,
+        )
+
+        start = time.time()
+
+        while (
+            time.time() - start
+            < TURNSTILE_WAIT_SECONDS
+        ):
+
+            token = self.get_turnstile_token(
+                sb
+            )
+
+            if token:
+
+                self.log(
+                    "✅ 检测到有效 Turnstile Token"
+                )
+
+                self.log(
+                    f"Token length={len(token)}"
+                )
+
+                return token
+
+            time.sleep(2)
+
+        raise RuntimeError(
+            (
+                "等待 Turnstile 验证超时："
+                f"{TURNSTILE_WAIT_SECONDS}s"
+            )
+        )
+
+    # --------------------------------------------------------
+    # 输出当前可点击元素
+    #
+    # 用于页面再次改版时排查 selector。
+    # 不输出 Cookie / Token / HTML。
+    # --------------------------------------------------------
+
+    def dump_clickables(self, sb):
+
+        try:
+
+            items = sb.execute_script(
+                """
+                const nodes = Array.from(
+                    document.querySelectorAll(
+                        [
+                            'button',
+                            'input[type="submit"]',
+                            'input[type="button"]',
+                            '[role="button"]'
+                        ].join(',')
+                    )
+                );
+
+                return nodes.slice(0, 50).map(el => {
+
+                    const text = (
+                        el.innerText ||
+                        el.value ||
+                        el.getAttribute('aria-label') ||
+                        ''
+                    )
+                    .trim()
+                    .slice(0, 100);
+
+                    return {
+                        tag: el.tagName,
+                        id: el.id || '',
+                        type: el.type || '',
+                        text: text,
+                        disabled:
+                            !!el.disabled,
+                        visible:
+                            !!(
+                                el.offsetWidth ||
+                                el.offsetHeight ||
+                                el.getClientRects().length
+                            )
+                    };
+                });
+                """
+            )
+
+            for item in items or []:
+
+                self.log(
+                    f"🔎 CLICKABLE: {item}"
+                )
+
+        except Exception as error:
+
+            self.log(
+                f"⚠️ 无法获取按钮列表: {error}"
+            )
+
+    # --------------------------------------------------------
+    # 自动寻找 Add Time
+    #
+    # 优先旧 ID，失败后按照按钮文字寻找。
+    # --------------------------------------------------------
+
+    def click_add_time(self, sb):
+
+        self.log(
+            "🖱️ 正在查找 Add Time 按钮..."
+        )
+
+        # 验证完成后给页面几秒更新 UI
+        time.sleep(3)
+
+        result = sb.execute_script(
+            """
+            function visible(el) {
+
+                if (!el) {
+                    return false;
+                }
+
+                const style =
+                    window.getComputedStyle(el);
+
+                const rect =
+                    el.getBoundingClientRect();
+
+                return (
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    rect.width > 0 &&
+                    rect.height > 0
+                );
+            }
+
+
+            function getLabel(el) {
+
+                return (
+                    el.innerText ||
+                    el.value ||
+                    el.getAttribute('aria-label') ||
+                    el.getAttribute('title') ||
+                    ''
+                ).trim();
+            }
+
+
+            // ----------------------------------------
+            // 1. 兼容旧 Falix selector
+            // ----------------------------------------
+
+            const oldButton =
+                document.querySelector(
+                    '#timer-page-btn'
+                );
+
+            if (
+                oldButton &&
+                visible(oldButton) &&
+                !oldButton.disabled
+            ) {
+
+                oldButton.scrollIntoView({
+                    block: 'center'
+                });
+
+                oldButton.click();
+
+                return {
+                    clicked: true,
+                    method:
+                        '#timer-page-btn',
+                    text:
+                        getLabel(oldButton)
+                };
+            }
+
+
+            // ----------------------------------------
+            // 2. 查找真正的 clickable 元素
+            // ----------------------------------------
+
+            const elements =
+                Array.from(
+                    document.querySelectorAll(
+                        [
+                            'button',
+                            'input[type="submit"]',
+                            'input[type="button"]',
+                            '[role="button"]',
+                            'a'
+                        ].join(',')
+                    )
+                );
+
+
+            const button =
+                elements.find(el => {
+
+                    if (
+                        !visible(el) ||
+                        el.disabled
+                    ) {
+                        return false;
+                    }
+
+                    const label =
+                        getLabel(el)
+                            .replace(
+                                /\\s+/g,
+                                ' '
+                            )
+                            .trim();
+
+                    return /^add\\s*time$/i.test(
+                        label
+                    );
+
+                }) ||
+
+                elements.find(el => {
+
+                    if (
+                        !visible(el) ||
+                        el.disabled
+                    ) {
+                        return false;
+                    }
+
+                    const label =
+                        getLabel(el)
+                            .replace(
+                                /\\s+/g,
+                                ' '
+                            )
+                            .trim();
+
+                    return /add\\s*time/i.test(
+                        label
+                    );
+                });
+
+
+            if (!button) {
+
+                return {
+                    clicked: false
+                };
+            }
+
+
+            button.scrollIntoView({
+                block: 'center'
+            });
+
+            button.click();
+
+
+            return {
+                clicked: true,
+                method:
+                    'text-search',
+                tag:
+                    button.tagName,
+                id:
+                    button.id || '',
+                text:
+                    getLabel(button)
+            };
+            """
+        )
+
+        if (
+            isinstance(result, dict)
+            and result.get("clicked")
+        ):
+
+            self.log(
+                (
+                    "✅ 已点击 Add Time "
+                    f"{result}"
+                )
+            )
+
+            return True
+
+        self.log(
+            "❌ 没有找到 Add Time"
+        )
+
+        self.dump_clickables(sb)
+
+        screenshot = os.path.join(
+            self.screenshot_dir,
+            "addtime_not_found.png",
+        )
+
+        sb.save_screenshot(
+            screenshot
+        )
+
+        self.send_telegram_notify(
+            (
+                "❌ FalixNodes 未找到 Add Time\n"
+                f"🖥️ 编号: {NUM}"
+            ),
+            screenshot,
+        )
+
+        raise RuntimeError(
+            "Add Time button not found"
+        )
+
+    # --------------------------------------------------------
+    # Watch Ad
+    # --------------------------------------------------------
+
+    def handle_watch_ad(self, sb):
+
+        self.log(
+            "🖱️ 检查 Watch Ad..."
+        )
+
+        time.sleep(2)
+
+        try:
+
+            if sb.is_element_visible(
+                "#watchAdBtn"
+            ):
+
+                self.log(
+                    "📺 检测到 Watch Ad"
+                )
+
+                sb.click(
+                    "#watchAdBtn"
+                )
+
+                time.sleep(15)
+
+                self.log(
+                    "✅ Watch Ad 已处理"
+                )
+
+                return
+
+        except Exception as error:
+
+            self.log(
+                f"⚠️ Watch Ad 检查异常: {error}"
+            )
+
+        self.log(
+            "✅ 页面没有 Watch Ad"
+        )
+
+    # --------------------------------------------------------
+    # 主流程
+    # --------------------------------------------------------
 
     def run(self):
-        self.log("=" * 40)
-        self.log("🚀 FalixNodes - 保活流程")
-        self.log("=" * 40)
-        self.log("🎯 正在启动 Chrome 浏览器...")
-        
-        # 使用 headed=True 强制有头模式渲染到 VNC
-        with SB(
-            uc=True,            # 启用反检测模式
-            test=True, 
-            headed=True,        # 关键：强制有头模式
-            headless=False,     # 明确禁用 headless
-            xvfb=False,         # 禁用内部虚拟显示器，使用系统 DISPLAY
-            chromium_arg="--no-sandbox,--disable-dev-shm-usage,--disable-gpu,--window-position=0,0,--start-maximized",
-            proxy=PROXY_URL if PROXY_URL else None
-        ) as sb:
-            try:
-                self.log("✅ 浏览器已启动！")
-                
-                # ... (省略中间步骤，保持原有逻辑不变) ...
-                
-                # 1. IP 检测
-                self.log("🌍 正在检测出口 IP...")
-                try:
-                    sb.open("https://api.ipify.org?format=json")
-                    ip_val = json.loads(re.search(r'\{.*\}', sb.get_text("body")).group(0)).get('ip', 'Unknown')
-                    parts = ip_val.split('.')
-                    self.log(f"✅ 当前出口 IP: {parts[0]}.{parts[1]}.***.{parts[-1]}")
-                except:
-                    self.log("⚠️ IP 检测跳过...")
 
-                # 2. 访问目标页面
-                self.log("🔗 访问目标页面...")
-                sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
+        self.log("=" * 50)
+        self.log(
+            "🚀 FalixNodes - 保活流程"
+        )
+        self.log("=" * 50)
+
+        self.log(
+            "🎯 正在启动 Chrome..."
+        )
+
+        with SB(
+            test=True,
+
+            headed=True,
+            headless=False,
+
+            # 外部使用 xvfb-run
+            xvfb=False,
+
+            chromium_arg=(
+                "--no-sandbox,"
+                "--disable-dev-shm-usage,"
+                "--disable-gpu,"
+                "--window-position=0,0,"
+                "--start-maximized"
+            ),
+
+            proxy=(
+                PROXY_URL
+                if PROXY_URL
+                else None
+            ),
+
+        ) as sb:
+
+            try:
+
+                self.log(
+                    "✅ Chrome 已启动"
+                )
+
+                # ------------------------------------
+                # IP
+                # ------------------------------------
+
+                self.check_ip(sb)
+
+                # ------------------------------------
+                # 访问 Falix
+                # ------------------------------------
+
+                self.log(
+                    f"🔗 访问 Timer 页面: {NUM}"
+                )
+
+                sb.open(
+                    TARGET
+                )
+
                 time.sleep(5)
 
-                if sb.is_element_present("#timer-page-countdown"):
-                    before = sb.get_text("#timer-page-countdown") # Renew前剩余时间
-                else:
-                    check_screenshot = f"{self.screenshot_dir}/check.png"
-                    sb.save_screenshot(check_screenshot)
-                    self.send_telegram_notify("🎉FalixNodes 保活程序\n🖥️编号: {NUM}\n❌未检测到服务器运行剩余时间,服务器可能被关闭或正在重新启动", check_screenshot)
-                    return
+                # ------------------------------------
+                # 获取续时前倒计时
+                # ------------------------------------
 
-                # 3. 验证Cloudflare,目前要过cf需要家宽ip
-                self.log("⏳ 开始Turnstile验证")
-                token = None
-                for i in range(2):
-                    self.log(f"第 {i+1} 次尝试")
-                    self.move_mouse_human(sb)
-                    sb.uc_gui_click_captcha()
-                    # 等待token
-                    for _ in range(15):
-                        time.sleep(10)
-                        token = sb.get_attribute('input[name="cf-turnstile-response"]',"value")
-                        if token:
-                            break
-                    if token:
-                        self.log("✅ Cloudflare Turnstile验证成功")
-                        print(f"Token length={len(token)}")
-                        break
-                    self.log("⚠️ click后没有token，尝试handle")
-                    self.move_mouse_human(sb)
-                    sb.uc_gui_handle_captcha()
-                    time.sleep(10)
-                    # handle后再次检查
-                    token = sb.get_attribute('input[name="cf-turnstile-response"]',"value")
-                    if token:
-                        self.log("✅ handle后获取Token")
-                        break
-                if not token:
-                    self.log("❌ Cloudflare验证失败")
-                    cf_screenshot = f"{self.screenshot_dir}/cf_failed.png"
-                    sb.save_screenshot(cf_screenshot)
-                    self.send_telegram_notify("CF失败", cf_screenshot)
-                    return
-                self.log("🎉 CF验证完成")
+                before = self.get_countdown(
+                    sb,
+                    timeout=15,
+                )
 
-                #taget_screenshot = f"{self.screenshot_dir}/taget.png"
-                #sb.save_screenshot(taget_screenshot)
-                #self.send_telegram_notify("✅访问保活页面并通过Cloudflare认证", taget_screenshot)
-                
-                # 4. 点击各种按钮
-                self.log("🖱️ 开始处理点击各种按钮")
+                if not before:
 
-                self.log("🖱️ 点击添加时间/Addtime")
-                sb.wait_for_element_visible("#timer-page-btn", timeout=10)
-                sb.click("#timer-page-btn")
-                time.sleep(1)
-                self.log("✅ 点击添加时间/Addtime完毕")
+                    screenshot = os.path.join(
+                        self.screenshot_dir,
+                        "timer_not_found.png",
+                    )
+
+                    sb.save_screenshot(
+                        screenshot
+                    )
+
+                    self.send_telegram_notify(
+                        (
+                            "❌ FalixNodes 未检测到 Timer\n"
+                            f"🖥️ 编号: {NUM}\n"
+                            "服务器可能关闭或 Timer 未启动"
+                        ),
+                        screenshot,
+                    )
+
+                    raise RuntimeError(
+                        "Timer countdown not found"
+                    )
+
+                self.log(
+                    f"🕒 保活前: {before}"
+                )
+
+                # ------------------------------------
+                # 正常 Turnstile 验证
+                # ------------------------------------
+
+                self.log(
+                    "⏳ 检查 Turnstile..."
+                )
+
+                self.wait_for_turnstile(
+                    sb
+                )
+
+                verified_screenshot = os.path.join(
+                    self.screenshot_dir,
+                    "verified.png",
+                )
+
+                sb.save_screenshot(
+                    verified_screenshot
+                )
+
+                # ------------------------------------
+                # Add Time
+                # ------------------------------------
+
+                self.click_add_time(
+                    sb
+                )
+
                 time.sleep(3)
 
-                #addtime_screenshot = f"{self.screenshot_dir}/addtime.png"
-                #sb.save_screenshot(addtime_screenshot)
-                #self.send_telegram_notify("✅已点击addtime", addtime_screenshot)                
+                # ------------------------------------
+                # Watch Ad（如果有）
+                # ------------------------------------
 
-                self.log("🖱️ 点击观看广告/WatchAD")
-                if sb.is_element_visible("#watchAdBtn"):
-                    sb.click("#watchAdBtn")
-                else:
-                    self.log("✅ 无需观看广告/WatchAD")
-                time.sleep(15)
-                self.log("✅ 点击观看广告/WatchAD完毕")
+                self.handle_watch_ad(
+                    sb
+                )
 
-                #watchad_screenshot = f"{self.screenshot_dir}/watchad.png"
-                #sb.save_screenshot(watchad_screenshot)
-                #self.send_telegram_notify("✅已点击watchad", addtime_screenshot)               
+                # ------------------------------------
+                # 重新访问页面确认
+                # ------------------------------------
 
-                # 通常成功后会返回服务器面板登录页面,因为没有cookies
+                self.log(
+                    "🔄 重新读取 Timer..."
+                )
 
-                # 5. 再次访问目标页面
-                self.log("🔗 再次访问目标页面...")
-                sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
+                sb.open(
+                    TARGET
+                )
+
                 time.sleep(5)
-                after = sb.get_text("#timer-page-countdown") # Renew前剩余时间
 
-                self.log("✅ 全部流程执行完毕")
-                finish_screenshot = f"{self.screenshot_dir}/finish.png"
-                sb.save_screenshot(finish_screenshot)
-                self.send_telegram_notify(f"🎉FalixNodes 保活程序\n🖥️编号: {NUM}\n🕒保活前剩余运行时间: {before}\n🚀保活后剩余运行时间: {after}", finish_screenshot)
-            
-            except Exception as e:
-                self.log(f"❌ 运行异常: {e}")
-                import traceback
+                after = self.get_countdown(
+                    sb,
+                    timeout=15,
+                )
+
+                if not after:
+
+                    raise RuntimeError(
+                        (
+                            "Add Time 后无法读取"
+                            "新的倒计时"
+                        )
+                    )
+
+                self.log(
+                    f"🕒 保活后: {after}"
+                )
+
+                # ------------------------------------
+                # 成功
+                # ------------------------------------
+
+                finish_screenshot = os.path.join(
+                    self.screenshot_dir,
+                    "finish.png",
+                )
+
+                sb.save_screenshot(
+                    finish_screenshot
+                )
+
+                message = (
+                    "🎉 FalixNodes 保活完成\n"
+                    f"🖥️ 编号: {NUM}\n"
+                    f"🕒 保活前: {before}\n"
+                    f"🚀 保活后: {after}"
+                )
+
+                self.send_telegram_notify(
+                    message,
+                    finish_screenshot,
+                )
+
+                self.log(
+                    "✅ 全部流程执行完毕"
+                )
+
+            except Exception as error:
+
+                self.log(
+                    f"❌ 运行异常: {error}"
+                )
+
                 traceback.print_exc()
-                sb.save_screenshot(f"{self.screenshot_dir}/error.png")
 
+                error_screenshot = os.path.join(
+                    self.screenshot_dir,
+                    "error.png",
+                )
+
+                try:
+                    sb.save_screenshot(
+                        error_screenshot
+                    )
+                except Exception:
+                    pass
+
+                self.send_telegram_notify(
+                    (
+                        "❌ FalixNodes 运行失败\n"
+                        f"🖥️ 编号: {NUM}\n"
+                        f"错误: {error}"
+                    ),
+                    error_screenshot,
+                )
+
+                # 非常重要：
+                # 重新抛出异常，让 GitHub Action 变成红色失败
+                raise
+
+
+# ============================================================
+# Entry
+# ============================================================
 
 if __name__ == "__main__":
     FalixNodesRenewal().run()
