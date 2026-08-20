@@ -5,7 +5,7 @@ import re
 import random
 import requests
 
-# 智能环境配置：仅在未设置时才应用默认值
+# 智能环境配置
 if "DISPLAY" not in os.environ:
     os.environ["DISPLAY"] = ":1"
     
@@ -13,23 +13,19 @@ if "XAUTHORITY" not in os.environ:
     if os.path.exists("/home/headless/.Xauthority"):
         os.environ["XAUTHORITY"] = "/home/headless/.Xauthority"
 
-print(f"[DEBUG] Env DISPLAY: {os.environ.get('DISPLAY')}")
-print(f"[DEBUG] Env XAUTHORITY: {os.environ.get('XAUTHORITY')}")
-
 from seleniumbase import SB
 
 # ================= 配置区域 =================
-PROXY_URL = os.getenv("PROXY", "")  # 代理
-NUM = os.getenv("NUM")  # 服务器编号
-TG_TOKEN = os.getenv("TG_TOKEN")  # tg通知token
-TG_CHAT_ID = os.getenv("TG_CHAT_ID")  # tg通知chat_id
-
-# 目标 URL
+PROXY_URL = os.getenv("PROXY", "")
+NUM = os.getenv("NUM")
+TG_TOKEN = os.getenv("TG_TOKEN")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
 # ===========================================
 
-# --- 喵酱的纯净版 Turnstile 验证模块 ---
+# --- 喵酱的强化版 Turnstile 验证模块 ---
 def _turnstile_token_ready(sb) -> bool:
+    """检查是否已经获取到有效的 CF Token"""
     try:
         token_ok = sb.execute_script("""
             var inp = document.querySelector("input[name='cf-turnstile-response']");
@@ -37,69 +33,48 @@ def _turnstile_token_ready(sb) -> bool:
         """)
         if token_ok: return True
     except: pass
-    try:
-        success_visible = sb.execute_script("""
-            var s = document.getElementById('success');
-            if (!s) return false;
-            var style = window.getComputedStyle(s);
-            return style.display !== 'none' && style.visibility !== 'hidden';
-        """)
-        if success_visible: return True
-    except: pass
     return False
 
-def _try_click_turnstile(sb) -> bool:
-    try:
-        sb.uc_gui_click_captcha()
-        return True
-    except: pass
-    try:
-        sb.switch_to_frame("iframe[src*='challenges.cloudflare']")
-        sb.click("input[type='checkbox'], .cb-lb", timeout=3)
-        sb.switch_to_default_content()
-        return True
-    except:
-        try: sb.switch_to_default_content()
-        except: pass
-    try:
-        sb.execute_script("var ts = document.querySelector('.cf-turnstile'); if (ts) ts.click();")
-        return True
-    except: pass
-    return False
-
-def wait_turnstile(sb, timeout: int = 90) -> bool:
-    try:
-        has_ts = sb.execute_script("""
-            return !!(document.querySelector('.cf-turnstile') ||
-                      document.querySelector('iframe[src*="challenges.cloudflare"]') ||
-                      document.querySelector('input[name="cf-turnstile-response"]'));
-        """)
-    except:
-        has_ts = False
-
-    if not has_ts:
-        print("[INFO] 无 Turnstile 组件，直接跳过喵")
-        return True
-
-    try:
-        sb.execute_script("var ts = document.querySelector('.cf-turnstile'); if (ts) ts.scrollIntoView({block:'center'});")
-    except: pass
-
+def wait_and_click_turnstile(sb, timeout: int = 60) -> bool:
+    """死磕 Turnstile，直到打上勾"""
+    print("[INFO] 正在等待 Turnstile 验证码加载喵...")
+    # 强制等 5 秒，让那个慢吞吞的 iframe 彻底加载出来
+    time.sleep(5) 
+    
     start = time.time()
     last_click = 0
 
     while time.time() - start < timeout:
         if _turnstile_token_ready(sb):
-            time.sleep(0.5)
             return True
+            
         now = time.time()
-        if now - last_click >= 3:
-            _try_click_turnstile(sb)
+        # 每隔 6 秒尝试一次综合点击法
+        if now - last_click >= 6:
+            print("[INFO] 尝试戳一下验证码...")
+            # 策略 1: SeleniumBase 官方自带的强力点击
+            try: sb.uc_gui_click_captcha()
+            except: pass
+            
+            # 策略 2: 切换到 iframe 里硬点
+            try:
+                sb.switch_to_frame("iframe[src*='challenges.cloudflare']")
+                sb.click("input[type='checkbox'], .cb-lb", timeout=2)
+                sb.switch_to_default_content()
+            except:
+                try: sb.switch_to_default_content()
+                except: pass
+                
+            # 策略 3: JS 强制触发
+            try: sb.execute_script("var ts = document.querySelector('.cf-turnstile'); if (ts) ts.click();")
+            except: pass
+            
             last_click = now
+            
         time.sleep(1)
 
-    if _turnstile_token_ready(sb): return True
-    return False
+    # 循环结束后最后查一次
+    return _turnstile_token_ready(sb)
 # ---------------------------------------
 
 class FalixNodesRenewal:
@@ -112,9 +87,6 @@ class FalixNodesRenewal:
     def log(self, msg):
         timestamp = time.strftime('%H:%M:%S')
         print(f"[{timestamp}] [INFO] {msg}", flush=True)
-
-    def human_wait(self, min_s=6, max_s=10):
-        time.sleep(random.uniform(min_s, max_s))
 
     def move_mouse_human(self, sb):
         try:
@@ -141,9 +113,8 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("🚀 FalixNodes - 纯净保活流程 (No Ads)喵")
+        self.log("🚀 FalixNodes - 纯净保活流程 (修复抢跑BUG版)喵")
         self.log("=" * 40)
-        self.log("🎯 正在启动 Chrome 浏览器...")
         
         with SB(
             uc=True,
@@ -157,17 +128,7 @@ class FalixNodesRenewal:
             try:
                 self.log("✅ 浏览器已启动！")
                 
-                # 1. IP 检测
-                self.log("🌍 正在检测出口 IP...")
-                try:
-                    sb.open("https://api.ipify.org?format=json")
-                    ip_val = json.loads(re.search(r'\{.*\}', sb.get_text("body")).group(0)).get('ip', 'Unknown')
-                    parts = ip_val.split('.')
-                    self.log(f"✅ 当前出口 IP: {parts[0]}.{parts[1]}.***.{parts[-1]}")
-                except:
-                    self.log("⚠️ IP 检测跳过...")
-
-                # 2. 访问目标页面
+                # 1. 访问目标页面
                 self.log("🔗 访问目标页面...")
                 sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
                 time.sleep(5)
@@ -177,35 +138,38 @@ class FalixNodesRenewal:
                 else:
                     check_screenshot = f"{self.screenshot_dir}/check.png"
                     sb.save_screenshot(check_screenshot)
-                    self.send_telegram_notify(f"🎉FalixNodes 保活程序\n🖥️编号: {NUM}\n❌未检测到服务器运行剩余时间,服务器可能被关闭或正在重新启动", check_screenshot)
+                    self.send_telegram_notify(f"🎉FalixNodes 保活程序\n🖥️编号: {NUM}\n❌未检测到服务器剩余时间，服务器可能关闭", check_screenshot)
                     return
 
-                # 3. 验证Cloudflare (融合 oyz8 纯净逻辑)
-                self.log("⏳ 开始 Turnstile 验证喵...")
+                # 2. 死磕 Turnstile 验证
+                self.log("⏳ 开始死磕 Turnstile 验证喵...")
                 self.move_mouse_human(sb)
                 
-                if wait_turnstile(sb, timeout=90):
-                    self.log("✅ Cloudflare Turnstile 验证成功！")
+                if wait_and_click_turnstile(sb, timeout=60):
+                    self.log("✅ Cloudflare 验证打勾成功！获取到了有效 Token喵！")
                 else:
-                    self.log("❌ Cloudflare 验证失败")
+                    self.log("❌ 验证码一直点不上，超时啦！")
                     cf_screenshot = f"{self.screenshot_dir}/cf_failed.png"
                     sb.save_screenshot(cf_screenshot)
-                    self.send_telegram_notify("❌ CF验证失败", cf_screenshot)
+                    self.send_telegram_notify("❌ CF验证失败，打勾超时", cf_screenshot)
                     return
                 
-                # 4. 纯净点击添加时间 (抛弃所有看广告逻辑)
-                self.log("🖱️ 开始处理加时按钮...")
+                # 3. 纯净点击添加时间
+                self.log("🖱️ 验证通过，准备点击添加时间 (Addtime)...")
+                time.sleep(2) # 留一点反应时间
                 try:
                     sb.wait_for_element_visible("#timer-page-btn", timeout=10)
                     sb.click("#timer-page-btn")
-                    self.log("✅ 成功点击添加时间 (Addtime) 完毕喵！")
+                    self.log("✅ 成功点击添加时间完毕喵！")
                 except Exception as e:
                     self.log(f"⚠️ 点击添加时间失败: {e}")
                 
-                time.sleep(5) # 给后端一点时间处理加时请求
+                # 4. 给后端充分的时间处理请求，防止没续上
+                self.log("⏳ 正在等待服务器后台加上时间...")
+                time.sleep(10) 
 
                 # 5. 再次访问目标页面核对新时间
-                self.log("🔗 再次访问目标页面核对时间...")
+                self.log("🔗 再次刷新页面核对最新时间...")
                 sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
                 time.sleep(5)
                 after = sb.get_text("#timer-page-countdown") if sb.is_element_present("#timer-page-countdown") else "未知"
@@ -213,7 +177,7 @@ class FalixNodesRenewal:
                 self.log("✅ 全部流程执行完毕")
                 finish_screenshot = f"{self.screenshot_dir}/finish.png"
                 sb.save_screenshot(finish_screenshot)
-                self.send_telegram_notify(f"🎉FalixNodes 保活程序\n🖥️编号: {NUM}\n🕒保活前剩余运行时间: {before}\n🚀保活后剩余运行时间: {after}", finish_screenshot)
+                self.send_telegram_notify(f"🎉FalixNodes 保活程序\n🖥️编号: {NUM}\n🕒保活前剩余时间: {before}\n🚀保活后剩余时间: {after}", finish_screenshot)
             
             except Exception as e:
                 self.log(f"❌ 运行异常: {e}")
