@@ -1,8 +1,10 @@
 name: FalixNodes-Keep-Server-Running
 
 on:
-  workflow_dispatch:
-
+  workflow_dispatch: # 允许手动触发
+  schedule:
+    # 这里的 */25 代表每隔 25 分钟执行一次喵！
+    - cron: '*/25 * * * *'
 jobs:
   Keep_Running:
     runs-on: ubuntu-latest
