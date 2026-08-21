@@ -98,16 +98,18 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
 
     return _turnstile_token_ready(sb)
 
-# ========== 动态时间捕手 (拒绝未知) ==========
+# ========== 动态时间捕手 (JS 强穿透，无视遮挡) ==========
 def get_time_safely(sb, timeout: int = 15) -> str:
     start = time.time()
     while time.time() - start < timeout:
         try:
-            if sb.is_element_visible("#timer-page-countdown"):
-                raw_text = sb.get_text("#timer-page-countdown").strip()
-                # 必须看到数字才算数
-                if raw_text and any(char.isdigit() for char in raw_text):
-                    return raw_text
+            # 🚨 绝招：用 JS 直接从底层扒字，不管上面盖了多少层 CF 验证或广告，统统无视！
+            raw_text = sb.execute_script("""
+                var el = document.querySelector('#timer-page-countdown');
+                return el ? (el.innerText || el.textContent).trim() : '';
+            """)
+            if raw_text and any(char.isdigit() for char in raw_text):
+                return raw_text
         except Exception: pass
         time.sleep(1)
     return "未知"
@@ -142,7 +144,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 终极完美融合版喵")
+        self.log("[🚀] FalixNodes - 究极完美融合版 (防漏加时)喵")
         self.log("=" * 40)
         
         with SB(
@@ -170,24 +172,20 @@ class FalixNodesRenewal:
                 sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
                 time.sleep(6)
                 
-                # 🚨 拦截 1：登录重定向
                 if "login" in sb.get_current_url():
                     login_screenshot = f"{self.screenshot_dir}/login_redirect.png"
                     sb.save_screenshot(login_screenshot)
                     self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 被重定向到登录页，IP被风控喵！", login_screenshot)
                     return
 
-                # 🚨 拦截 2：眼见为实的停机检测
                 self.log("[🔍] 正在观察服务器运行状态...")
                 is_alive = False
                 try:
-                    # 只要 10 秒内能在屏幕上看到倒计时，就认定为活着！
                     sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
                     is_alive = True
                 except: pass
 
                 if not is_alive:
-                    # 如果 10 秒了还看不到倒计时，再去看是不是有明显的停机字眼
                     if sb.is_text_visible("No active timer") or sb.is_text_visible("Back to Dashboard") or sb.is_text_visible("未找到活动"):
                         self.log("[❌] 确认服务器真的停机了喵！")
                         dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
@@ -199,7 +197,6 @@ class FalixNodesRenewal:
                 else:
                     self.log("[✅] 确认看到倒计时啦！服务器存活喵！")
 
-                # 3. 循环 F5 刷新破解验证码 (最多 3 次)
                 cf_passed = False
                 for attempt in range(1, 4):
                     self.log(f"\n[⏳] 第 {attempt} 次尝试破解 Cloudflare 验证码喵...")
@@ -220,27 +217,30 @@ class FalixNodesRenewal:
                     self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 连续 3 次打勾超时！", fail_screenshot)
                     return
 
-                # 4. 安全捕获当前时间
                 self.log("[🕒] 正在捕获当前剩余时间...")
                 before = get_time_safely(sb, timeout=15)
                 self.log(f"[🕒] 当前剩余时间: {before}")
 
-                # 5. 纯净 JS 点击加时按钮
+                # 🚨 绝招：给网页前端一点反应时间处理 Token
+                self.log("[⏳] 正在让网页前端消化验证码 Token，强行冷静 3 秒...")
+                time.sleep(3)
+
                 self.log("[🖱️] 准备点击添加时间 (Addtime)...")
                 try:
                     sb.execute_script("""
                         var btn = document.querySelector("#timer-page-btn");
-                        if(btn) { btn.click(); }
+                        if(btn) { 
+                            btn.removeAttribute("disabled"); // 强行解除禁用状态
+                            btn.click(); 
+                        }
                     """)
                     self.log("[✅] 成功执行加时点击喵！")
                 except Exception as e:
                     self.log(f"[⚠️] 点击添加时间失败: {e}")
                 
-                # 6. 【核心指令】等待服务器后台加时 10 秒
                 self.log("[⏳] 正在乖乖等待 10 秒钟，让服务器消化加时请求...")
                 time.sleep(10) 
 
-                # 7. 刷新页面并捕获最新时间
                 self.log("[🔗] 时间到！正在刷新页面以获取最新时间...")
                 sb.refresh()
                 time.sleep(5)
