@@ -71,7 +71,7 @@ def _try_click_turnstile(sb) -> bool:
 
 def wait_turnstile(sb, timeout: int = 60) -> bool:
     print("[INFO] 正在耐心等待 Cloudflare 验证码完全加载喵...")
-    time.sleep(10)
+    time.sleep(15)
     
     try:
         sb.execute_script("""
@@ -87,7 +87,7 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
         if _turnstile_token_ready(sb):
             print("[INFO] ✅ Turnstile 绿勾验证完成喵！")
             # 🚨 关键修复1：绿勾后强制等待 3 秒，让后端服务器同步状态！
-            time.sleep(3) 
+            time.sleep(5) 
             return True
 
         now = time.time()
