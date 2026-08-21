@@ -54,7 +54,6 @@ def _try_click_turnstile(sb) -> bool:
             sb.switch_to_frame("iframe[src*='challenges.cloudflare']")
             sb.click("input[type='checkbox'], .cb-lb, .mark", timeout=2)
             sb.switch_to_default_content()
-            print("[INFO] 成功戳中 iframe 里的验证码框喵！")
             return True
     except Exception:
         try: sb.switch_to_default_content()
@@ -86,7 +85,6 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
     while time.time() - start < timeout:
         if _turnstile_token_ready(sb):
             print("[INFO] ✅ Turnstile 绿勾验证完成喵！")
-            # 🚨 关键修复1：绿勾后强制等待 3 秒，让后端服务器同步状态！
             time.sleep(3) 
             return True
 
@@ -130,7 +128,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - kof96zip (求稳加时版)喵")
+        self.log("[🚀] FalixNodes - kof96zip (停机侦测+求稳加时版)喵")
         self.log("=" * 40)
         
         with SB(
@@ -156,12 +154,22 @@ class FalixNodesRenewal:
                 
                 self.log(f"[🔗] 强制访问目标链接: {TAGET}")
                 sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
-                time.sleep(6)
+                time.sleep(8) # 等待页面完全加载
                 
+                # 🚨 拦截 1：官方强制重定向登录拦截
                 if "login" in sb.get_current_url():
                     login_screenshot = f"{self.screenshot_dir}/login_redirect.png"
                     sb.save_screenshot(login_screenshot)
                     self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 被官方重定向到登录页了，代理IP可能被风控喵！", login_screenshot)
+                    return
+
+                # 🚨 拦截 2：服务器停机/休眠检测拦截 (解决凌晨3点的报错)
+                page_text = sb.get_text("body").lower()
+                if "no active timer was found" in page_text:
+                    self.log("[❌] 发现服务器处于停机或无计时器状态！")
+                    dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
+                    sb.save_screenshot(dead_screenshot)
+                    self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：您的服务器已停机或休眠 (No active timer)，请前往面板手动开机喵！", dead_screenshot)
                     return
 
                 cf_passed = False
@@ -183,11 +191,10 @@ class FalixNodesRenewal:
                     self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 连续 3 次打勾超时！", fail_screenshot)
                     return
 
-                # 🚨 关键修复2：安全获取时间，给 JS 渲染留足时间
                 before = "未知"
                 try:
                     sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
-                    time.sleep(2) # 等待数字渲染
+                    time.sleep(2) 
                     raw_text = sb.get_text("#timer-page-countdown").strip()
                     if raw_text:
                         before = raw_text
@@ -210,7 +217,7 @@ class FalixNodesRenewal:
 
                 self.log("[🔗] 再次刷新页面核对最新时间...")
                 sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
-                time.sleep(6)
+                time.sleep(8)
                 
                 after = "未知"
                 try:
