@@ -24,7 +24,7 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
 # ===========================================
 
-# ========== 核心 CF 打勾逻辑 ==========
+# ========== 核心辅助方法 ==========
 def _turnstile_token_ready(sb) -> bool:
     try:
         token_ok = sb.execute_script("""
@@ -54,7 +54,6 @@ def _try_click_turnstile(sb) -> bool:
             sb.switch_to_frame("iframe[src*='challenges.cloudflare']")
             sb.click("input[type='checkbox'], .cb-lb, .mark", timeout=2)
             sb.switch_to_default_content()
-            print("[INFO] 成功戳中 iframe 里的验证码框喵！")
             return True
     except Exception:
         try: sb.switch_to_default_content()
@@ -66,12 +65,11 @@ def _try_click_turnstile(sb) -> bool:
             if (ts) ts.click();
         """)
     except Exception: pass
-
     return False
 
 def wait_turnstile(sb, timeout: int = 60) -> bool:
     print("[INFO] 正在耐心等待 Cloudflare 验证码完全加载喵...")
-    time.sleep(15)
+    time.sleep(10)
     
     try:
         sb.execute_script("""
@@ -86,8 +84,7 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
     while time.time() - start < timeout:
         if _turnstile_token_ready(sb):
             print("[INFO] ✅ Turnstile 绿勾验证完成喵！")
-            # 🚨 关键修复1：绿勾后强制等待 3 秒，让后端服务器同步状态！
-            time.sleep(5) 
+            time.sleep(3) 
             return True
 
         now = time.time()
@@ -99,7 +96,22 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
         time.sleep(1)
 
     return _turnstile_token_ready(sb)
+
+def get_time_safely(sb, timeout: int = 20) -> str:
+    """动态时间捕手：死等倒计时数字出现，拒绝'未知'"""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            if sb.is_element_visible("#timer-page-countdown"):
+                raw_text = sb.get_text("#timer-page-countdown").strip()
+                # 只有当文本中包含数字时，才认为是真正的加载完成
+                if raw_text and any(char.isdigit() for char in raw_text):
+                    return raw_text
+        except Exception: pass
+        time.sleep(1)
+    return "未知"
 # ==================================================
+
 
 class FalixNodesRenewal:
     def __init__(self):
@@ -130,7 +142,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - kof96zip (求稳加时版)喵")
+        self.log("[🚀] FalixNodes - 终极稳定版 (精准10秒刷新)喵")
         self.log("=" * 40)
         
         with SB(
@@ -156,23 +168,48 @@ class FalixNodesRenewal:
                 
                 self.log(f"[🔗] 强制访问目标链接: {TAGET}")
                 sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
-                time.sleep(6)
+                time.sleep(8) 
                 
                 if "login" in sb.get_current_url():
                     login_screenshot = f"{self.screenshot_dir}/login_redirect.png"
                     sb.save_screenshot(login_screenshot)
-                    self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 被官方重定向到登录页了，代理IP可能被风控喵！", login_screenshot)
+                    self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 代理IP被风控，已被强制重定向到登录页喵！", login_screenshot)
                     return
 
+                # 拦截 2：精准停机检测
+                has_cf_or_timer = False
+                try:
+                    has_cf_or_timer = sb.execute_script("""
+                        return !!document.querySelector('.cf-turnstile') || 
+                               !!document.querySelector('iframe[src*="challenges.cloudflare"]') ||
+                               !!document.querySelector('#timer-page-countdown');
+                    """)
+                except: pass
+
+                if not has_cf_or_timer:
+                    if sb.is_text_visible("No active timer") or sb.is_text_visible("Back to Dashboard") or sb.is_text_visible("未找到活动"):
+                        self.log("[❌] 确认服务器处于停机状态喵！")
+                        dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
+                        sb.save_screenshot(dead_screenshot)
+                        self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！", dead_screenshot)
+                        return
+
+                # 3. Cloudflare 破解
                 cf_passed = False
                 for attempt in range(1, 4):
                     self.log(f"\n[⏳] 第 {attempt} 次尝试破解 Cloudflare 验证码喵...")
+                    
+                    if "google_vignette" in sb.get_current_url():
+                        self.log("[⚠️] 遇到全屏广告拦截，重新加载喵...")
+                        sb.open(TAGET)
+                        time.sleep(8)
+                        
                     if wait_turnstile(sb, timeout=60):
                         cf_passed = True
                         break
                     
                     if attempt < 3:
-                        self.log(f"[🔄] 验证码过不去，准备按 F5 刷新页面重试喵！")
+                        self.log(f"[🔄] 验证码未通过，准备 F5 刷新页面重试喵！")
                         sb.refresh()
                         time.sleep(10)
                 
@@ -183,18 +220,12 @@ class FalixNodesRenewal:
                     self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 连续 3 次打勾超时！", fail_screenshot)
                     return
 
-                # 🚨 关键修复2：安全获取时间，给 JS 渲染留足时间
-                before = "未知"
-                try:
-                    sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
-                    time.sleep(2) # 等待数字渲染
-                    raw_text = sb.get_text("#timer-page-countdown").strip()
-                    if raw_text:
-                        before = raw_text
-                    self.log(f"[🕒] 当前剩余时间: {before}")
-                except Exception:
-                    self.log("[⚠️] 找不到时间标签或为空喵？")
+                # 4. 获取加时前的时间 (使用超级捕手)
+                self.log("[🕒] 正在安全获取当前剩余时间...")
+                before = get_time_safely(sb, timeout=20)
+                self.log(f"[🕒] 当前剩余时间: {before}")
 
+                # 5. 点击加时按钮
                 self.log("[🖱️] 准备点击添加时间 (Addtime)...")
                 try:
                     sb.execute_script("""
@@ -205,21 +236,18 @@ class FalixNodesRenewal:
                 except Exception as e:
                     self.log(f"[⚠️] 点击添加时间失败: {e}")
                 
-                self.log("[⏳] 正在等待服务器后台加上时间...")
-                time.sleep(12) 
+                # 6. 【核心需求】等待 10 秒钟
+                self.log("[⏳] 正在等待 10 秒钟，让服务器后台处理加时请求...")
+                time.sleep(10) 
 
-                self.log("[🔗] 再次刷新页面核对最新时间...")
-                sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
-                time.sleep(6)
+                # 7. 刷新页面并获取最新时间
+                self.log("[🔗] 时间到！正在刷新页面以获取最新时间...")
+                sb.refresh() # 使用 refresh 比重新 open 更好，避免额外重定向
+                time.sleep(5)
                 
-                after = "未知"
-                try:
-                    sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
-                    time.sleep(2)
-                    after_raw = sb.get_text("#timer-page-countdown").strip()
-                    if after_raw:
-                        after = after_raw
-                except Exception: pass
+                self.log("[🕒] 正在捕获加时后的最新时间...")
+                after = get_time_safely(sb, timeout=20)
+                self.log(f"[🕒] 最新剩余时间: {after}")
 
                 self.log("[✅] 全部流程执行完毕")
                 finish_screenshot = f"{self.screenshot_dir}/finish.png"
