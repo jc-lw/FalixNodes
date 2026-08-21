@@ -128,7 +128,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - kof96zip (停机侦测+求稳加时版)喵")
+        self.log("[🚀] FalixNodes - kof96zip (精准查活+清全屏广告版)喵")
         self.log("=" * 40)
         
         with SB(
@@ -154,7 +154,7 @@ class FalixNodesRenewal:
                 
                 self.log(f"[🔗] 强制访问目标链接: {TAGET}")
                 sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
-                time.sleep(8) # 等待页面完全加载
+                time.sleep(8) 
                 
                 # 🚨 拦截 1：官方强制重定向登录拦截
                 if "login" in sb.get_current_url():
@@ -163,24 +163,43 @@ class FalixNodesRenewal:
                     self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 被官方重定向到登录页了，代理IP可能被风控喵！", login_screenshot)
                     return
 
-                # 🚨 拦截 2：服务器停机/休眠检测拦截 (解决凌晨3点的报错)
-                page_text = sb.get_text("body").lower()
-                if "no active timer was found" in page_text:
-                    self.log("[❌] 发现服务器处于停机或无计时器状态！")
-                    dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
-                    sb.save_screenshot(dead_screenshot)
-                    self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：您的服务器已停机或休眠 (No active timer)，请前往面板手动开机喵！", dead_screenshot)
-                    return
+                # 🚨 拦截 2：精准停机检测 (修复假死 Bug)
+                has_cf_or_timer = False
+                try:
+                    # 先看看有没有CF框，或者有没有倒计时元素。只要有任何一个，绝对不是停机！
+                    has_cf_or_timer = sb.execute_script("""
+                        return !!document.querySelector('.cf-turnstile') || 
+                               !!document.querySelector('iframe[src*="challenges.cloudflare"]') ||
+                               !!document.querySelector('#timer-page-countdown');
+                    """)
+                except: pass
 
+                if not has_cf_or_timer:
+                    # 只有在页面上既没有CF又没有倒计时的时候，才去查文字！并且要求必须是可见文字！
+                    if sb.is_text_visible("No active timer") or sb.is_text_visible("Back to Dashboard") or sb.is_text_visible("未找到活动"):
+                        self.log("[❌] 确认服务器真的处于停机或无计时器状态喵！")
+                        dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
+                        sb.save_screenshot(dead_screenshot)
+                        self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：您的服务器已停机或休眠 (No active timer)，请前往面板手动开机喵！", dead_screenshot)
+                        return
+
+                # 3. 循环 F5 刷新破解验证码 (最多 3 次)
                 cf_passed = False
                 for attempt in range(1, 4):
                     self.log(f"\n[⏳] 第 {attempt} 次尝试破解 Cloudflare 验证码喵...")
+                    
+                    # 🚨 拦截 3：全屏广告刺客检测
+                    if "google_vignette" in sb.get_current_url():
+                        self.log("[⚠️] 遇到全屏广告拦截 (#google_vignette)，执行清理喵...")
+                        sb.open(TAGET) # 重新打开纯净链接
+                        time.sleep(8)
+                        
                     if wait_turnstile(sb, timeout=60):
                         cf_passed = True
                         break
                     
                     if attempt < 3:
-                        self.log(f"[🔄] 验证码过不去，准备按 F5 刷新页面重试喵！")
+                        self.log(f"[🔄] 验证码过不去(可能卡死了)，准备按 F5 刷新页面重试喵！")
                         sb.refresh()
                         time.sleep(10)
                 
@@ -191,6 +210,7 @@ class FalixNodesRenewal:
                     self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 连续 3 次打勾超时！", fail_screenshot)
                     return
 
+                # 4. 获取时间前强制清一次广告
                 before = "未知"
                 try:
                     sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
