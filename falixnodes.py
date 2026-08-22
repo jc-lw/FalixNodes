@@ -141,22 +141,9 @@ class FalixNodesRenewal:
         except Exception as e:
             self.log(f"[❌] TG 推送失败: {e}")
 
-    # 🚨 绝招：网址巡逻雷达 🚨
-    def enforce_target_page(self, sb):
-        """只要发现网址变成了 login 或广告，立刻死死拽回指定网站"""
-        for _ in range(3):
-            url = sb.get_current_url()
-            if "login" in url or "google_vignette" in url:
-                self.log(f"[⚠️] 警报！网址突变为 {url}！立刻强制指定网站重新操作喵！")
-                sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
-                time.sleep(8)
-            else:
-                break
-        return "login" not in sb.get_current_url()
-
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 网址雷达锁定版 (见login就重开)喵")
+        self.log("[🚀] FalixNodes - 大循环重置版 (见login就彻底重头来)喵")
         self.log("=" * 40)
         
         with SB(
@@ -180,105 +167,122 @@ class FalixNodesRenewal:
                 except:
                     self.log("[⚠️] IP 检测跳过...")
                 
-                self.log(f"[🔗] 强制访问目标链接: {TAGET}")
-                sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
-                time.sleep(8)
-                
-                # 🚨 第一道防线
-                if not self.enforce_target_page(sb):
-                    login_screenshot = f"{self.screenshot_dir}/login_redirect.png"
-                    sb.save_screenshot(login_screenshot)
-                    self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 连拉3次都被踢回登录页，彻底被风控喵！", login_screenshot)
-                    return
+                # 🚨 史诗级强化：外层大循环！只要出事，全盘推翻重头再跑！最多重试 2 次。
+                for main_loop in range(1, 3):
+                    self.log(f"\n[🌟] 开始第 {main_loop} 轮完整保活流程喵...")
+                    
+                    self.log(f"[🔗] 强制访问目标链接: {TAGET}")
+                    sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
+                    time.sleep(8)
+                    
+                    url = sb.get_current_url()
+                    if "login" in url or "google_vignette" in url:
+                        self.log(f"[⚠️] 警报！一进来网址不对 ({url})！")
+                        if main_loop == 2:
+                            login_screenshot = f"{self.screenshot_dir}/login_redirect.png"
+                            sb.save_screenshot(login_screenshot)
+                            self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 连续两次被重定向，IP被彻底风控喵！", login_screenshot)
+                            return
+                        else:
+                            self.log("[🔄] 准备重新开启第二轮大循环喵...")
+                            continue # 直接回到第 185 行，重新访问目标链接！
 
-                self.log("[🔍] 正在观察服务器运行状态...")
-                is_alive = False
-                try:
-                    sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
-                    is_alive = True
-                except: pass
+                    self.log("[🔍] 正在观察服务器运行状态...")
+                    is_alive = False
+                    try:
+                        sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
+                        is_alive = True
+                    except: pass
 
-                if not is_alive:
-                    body_text = sb.get_text("body").lower()
-                    if "no active timer" in body_text or "back to dashboard" in body_text or "未找到活动" in body_text:
-                        self.log("[❌] 确认服务器真的停机了喵！")
-                        dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
-                        sb.save_screenshot(dead_screenshot)
-                        self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！", dead_screenshot)
-                        return
+                    if not is_alive:
+                        body_text = sb.get_text("body").lower()
+                        if "no active timer" in body_text or "back to dashboard" in body_text or "未找到活动" in body_text:
+                            self.log("[❌] 确认服务器真的停机了喵！")
+                            dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
+                            sb.save_screenshot(dead_screenshot)
+                            self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！", dead_screenshot)
+                            return
+                        else:
+                            self.log("[⚠️] 没看到倒计时，也没看到停机提示，继续强闯 CF 喵...")
                     else:
-                        self.log("[⚠️] 没看到倒计时，也没看到停机提示，继续强闯 CF 喵...")
-                else:
-                    self.log("[✅] 确认看到倒计时啦！服务器存活喵！")
+                        self.log("[✅] 确认看到倒计时啦！服务器存活喵！")
 
-                # 3. CF 打勾循环
-                cf_passed = False
-                for attempt in range(1, 4):
-                    self.log(f"\n[⏳] 第 {attempt} 次尝试破解 Cloudflare 验证码喵...")
-                    
-                    # 🚨 循环内防线
-                    self.enforce_target_page(sb)
+                    # 3. CF 打勾循环
+                    cf_passed = False
+                    for attempt in range(1, 4):
+                        self.log(f"\n[⏳] 第 {attempt} 次尝试破解 Cloudflare 验证码喵...")
                         
-                    if wait_turnstile(sb, timeout=60):
-                        cf_passed = True
-                        break
+                        url = sb.get_current_url()
+                        if "login" in url or "google_vignette" in url:
+                            self.log("[⚠️] 验证途中网址突变，重新加载本页喵...")
+                            sb.open(TAGET)
+                            time.sleep(8)
+                            
+                        if wait_turnstile(sb, timeout=60):
+                            cf_passed = True
+                            break
+                        
+                        if attempt < 3:
+                            self.log(f"[🔄] 验证码过不去，准备按 F5 刷新页面重试喵！")
+                            sb.refresh()
+                            time.sleep(10)
                     
-                    if attempt < 3:
-                        self.log(f"[🔄] 验证码过不去，强制指定网站重新操作喵！")
-                        sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
-                        time.sleep(10)
-                
-                if not cf_passed:
-                    self.log("[❌] 连续 3 次打勾失败，投降了喵...")
-                    fail_screenshot = f"{self.screenshot_dir}/cf_fail.png"
-                    sb.save_screenshot(fail_screenshot)
-                    self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 连续 3 次打勾超时！", fail_screenshot)
-                    return
+                    if not cf_passed:
+                        self.log("[❌] 连续 3 次打勾失败，投降了喵...")
+                        fail_screenshot = f"{self.screenshot_dir}/cf_fail.png"
+                        sb.save_screenshot(fail_screenshot)
+                        self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 连续 3 次打勾超时！", fail_screenshot)
+                        return
 
-                self.log("[⏳] 正在让网页前端消化验证码 Token，强行冷静 3 秒...")
-                time.sleep(3)
+                    self.log("[⏳] 正在让网页前端消化验证码 Token，强行冷静 3 秒...")
+                    time.sleep(3)
 
-                # 🚨 加时前防线：点按钮前如果发现到了登录页，坚决不瞎点
-                if not self.enforce_target_page(sb):
-                    self.log("[❌] 刚要点按钮就被踢到登录页，中止本次任务喵！")
-                    return
+                    # 🚨 致命 Bug 修复处：点按钮前最后一次检查网址，如果有变，直接触发大循环重置！
+                    url = sb.get_current_url()
+                    if "login" in url or "google_vignette" in url:
+                        self.log(f"[⚠️] 警报！刚要点加时按钮，网址突变为 {url}！")
+                        if main_loop == 2:
+                            self.log("[❌] 两次都在关键时刻被踢，中止本次任务喵！")
+                            return
+                        else:
+                            self.log("[🔄] 绝不瞎点！立刻放弃当前进度，执行大循环彻底重头来过喵！")
+                            continue # 这里触发 continue，就会跳过下面的加时代码，回到 185 行重新从头开始！
 
-                self.log("[🕒] 正在捕获当前剩余时间...")
-                before = get_time_safely(sb, timeout=15)
-                self.log(f"[🕒] 当前剩余时间: {before}")
+                    self.log("[🕒] 正在捕获当前剩余时间...")
+                    before = get_time_safely(sb, timeout=15)
+                    self.log(f"[🕒] 当前剩余时间: {before}")
 
-                self.log("[🖱️] 准备点击添加时间 (Addtime)...")
-                try:
-                    sb.execute_script("""
-                        var btn = document.querySelector("#timer-page-btn");
-                        if(btn) { 
-                            btn.removeAttribute("disabled"); 
-                            btn.click(); 
-                        }
-                    """)
-                    self.log("[✅] 成功执行加时点击喵！")
-                except Exception as e:
-                    self.log(f"[⚠️] 点击添加时间失败: {e}")
-                
-                self.log("[⏳] 正在乖乖等待 10 秒钟，让服务器消化加时请求...")
-                time.sleep(10) 
+                    self.log("[🖱️] 准备点击添加时间 (Addtime)...")
+                    try:
+                        sb.execute_script("""
+                            var btn = document.querySelector("#timer-page-btn");
+                            if(btn) { 
+                                btn.removeAttribute("disabled"); 
+                                btn.click(); 
+                            }
+                        """)
+                        self.log("[✅] 成功执行加时点击喵！")
+                    except Exception as e:
+                        self.log(f"[⚠️] 点击添加时间失败: {e}")
+                    
+                    self.log("[⏳] 正在乖乖等待 10 秒钟，让服务器消化加时请求...")
+                    time.sleep(10) 
 
-                # 7. 获取最终时间 (严格遵守主人的要求：强制重新访问指定网站)
-                self.log("[🔗] 时间到！正在强制重新指定网站以获取最新时间...")
-                sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
-                time.sleep(8)
-                
-                # 🚨 最后一道防线：保证截图不截成 Login
-                self.enforce_target_page(sb)
+                    self.log("[🔗] 时间到！正在强制重新指定网站以获取最新时间...")
+                    sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
+                    time.sleep(8)
+                    
+                    self.log("[🕒] 正在捕获加时后的最新时间...")
+                    after = get_time_safely(sb, timeout=15)
+                    self.log(f"[🕒] 最新剩余时间: {after}")
 
-                self.log("[🕒] 正在捕获加时后的最新时间...")
-                after = get_time_safely(sb, timeout=15)
-                self.log(f"[🕒] 最新剩余时间: {after}")
-
-                self.log("[✅] 全部流程执行完毕")
-                finish_screenshot = f"{self.screenshot_dir}/finish.png"
-                sb.save_screenshot(finish_screenshot)
-                self.send_telegram_notify(f"🎉FalixNodes 保活程序\n🖥️编号: {NUM}\n🕒保活前剩余时间: {before}\n🚀保活后剩余时间: {after}", finish_screenshot)
+                    self.log("[✅] 全部流程执行完毕")
+                    finish_screenshot = f"{self.screenshot_dir}/finish.png"
+                    sb.save_screenshot(finish_screenshot)
+                    self.send_telegram_notify(f"🎉FalixNodes 保活程序\n🖥️编号: {NUM}\n🕒保活前剩余时间: {before}\n🚀保活后剩余时间: {after}", finish_screenshot)
+                    
+                    # 🚀 只要执行到这里，说明整个加时流程完美通关！打破外层循环，收工！
+                    break 
             
             except Exception as e:
                 self.log(f"[❌] 运行异常: {e}")
