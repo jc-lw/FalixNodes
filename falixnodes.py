@@ -45,7 +45,6 @@ def parse_time_to_seconds(time_str: str) -> int:
 # ========== 核心 CF 打勾逻辑 ==========
 def _turnstile_token_ready(sb) -> bool:
     try:
-        # 🚨 已修复：严格的闭包语法 🚨
         token_ok = sb.execute_script("""
             return (function() {
                 var inp = document.querySelector("input[name='cf-turnstile-response']");
@@ -114,7 +113,6 @@ def get_time_safely(sb, timeout: int = 15) -> str:
     start = time.time()
     while time.time() - start < timeout:
         try:
-            # 🚨 已修复：严格的闭包语法 🚨
             raw_text = sb.execute_script("""
                 return (function() {
                     var el = document.querySelector('#timer-page-countdown');
@@ -157,7 +155,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 严谨时间校验版 (拒绝假成功+无语法报错)喵")
+        self.log("[🚀] FalixNodes - 严谨时间校验 + 初始抢救防线版喵")
         self.log("=" * 40)
         
         with SB(
@@ -181,7 +179,6 @@ class FalixNodesRenewal:
                 except:
                     self.log("[⚠️] IP 检测跳过...")
                 
-                # 最多尝试 3 个完整的大循环
                 max_loops = 3
                 for main_loop in range(1, max_loops + 1):
                     self.log(f"\n[🌟] 开始第 {main_loop} 轮完整保活流程喵...")
@@ -217,9 +214,22 @@ class FalixNodesRenewal:
                     else:
                         self.log("[✅] 确认看到倒计时啦！")
 
-                    # 获取操作前的基准时间
+                    # 🚨 重构补回：初始时间安全拦截与抢救防线 🚨
                     self.log("[🕒] 正在捕获加时前基准时间...")
                     before = get_time_safely(sb, timeout=15)
+                    
+                    if before == "未知":
+                        self.log("[⚠️] 警报！初始时间未能加载出来（网络严重卡顿），尝试原位 F5 抢救喵...")
+                        sb.refresh()
+                        time.sleep(10)
+                        before = get_time_safely(sb, timeout=15)
+                        if before == "未知":
+                            self.log("[❌] 抢救无效！连初始时间都读不到，强行打勾必然死循环。放弃本轮大循环！")
+                            if main_loop == max_loops:
+                                self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：页面加载严重超时，无法读取时间数据喵！")
+                                return
+                            continue
+
                     before_sec = parse_time_to_seconds(before)
                     self.log(f"[🕒] 当前剩余时间: {before} ({before_sec}秒)")
 
@@ -245,7 +255,6 @@ class FalixNodesRenewal:
                     btn_ready = False
                     for _ in range(30):
                         try:
-                            # 🚨 已修复：严格的闭包语法 🚨
                             is_disabled = sb.execute_script("""
                                 return (function() {
                                     var btn = document.querySelector('#timer-page-btn');
@@ -263,7 +272,6 @@ class FalixNodesRenewal:
                     else:
                         self.log("[🖱️] 准备使用原生点击触发 Addtime...")
                         try:
-                            # 正常 Selenium 点击，如果被遮挡则使用纯净 JS click，但绝不 removeAttribute
                             sb.click("#timer-page-btn", timeout=5)
                             self.log("[✅] 按钮点击完毕！")
                         except Exception:
@@ -282,7 +290,6 @@ class FalixNodesRenewal:
                     after_sec = parse_time_to_seconds(after)
                     self.log(f"[🕒] 最新剩余时间: {after} ({after_sec}秒)")
 
-                    # 核心校验逻辑：只有时间严格增加，才算真正成功
                     if after_sec > before_sec and after_sec > 0:
                         self.log(f"[✅] 时间已确认增加 ({before_sec} -> {after_sec})，续费真正成功！")
                         finish_screenshot = f"{self.screenshot_dir}/finish.png"
