@@ -1,524 +1,293 @@
-
-import os
-import re
 import time
-import traceback
-from typing import Optional, Tuple
-
+import os
+import json
+import re
+import random
 import requests
-from seleniumbase import SB
 
-# ============================================================
-# FalixNodes timer renewal - stable / verified-result edition
-# Based on the Aug 22 workflow shape, but rewritten to fix the
-# false-success problem after clicking Add Time.
-# ============================================================
-
-# Keep the GitHub Actions / xvfb-run behavior: do not overwrite an
-# existing DISPLAY provided by xvfb-run.
+# 智能环境配置
 if "DISPLAY" not in os.environ:
     os.environ["DISPLAY"] = ":1"
-
+    
 if "XAUTHORITY" not in os.environ:
-    candidate = "/home/headless/.Xauthority"
-    if os.path.exists(candidate):
-        os.environ["XAUTHORITY"] = candidate
+    if os.path.exists("/home/headless/.Xauthority"):
+        os.environ["XAUTHORITY"] = "/home/headless/.Xauthority"
 
-PROXY_URL = os.getenv("PROXY", "").strip()
-NUM = (os.getenv("NUM") or "").strip()
-TG_TOKEN = (os.getenv("TG_TOKEN") or "").strip()
-TG_CHAT_ID = (os.getenv("TG_CHAT_ID") or "").strip()
+from seleniumbase import SB
 
-if not NUM:
-    raise RuntimeError("Missing environment variable: NUM")
+# ================= 配置区域 =================
+PROXY_URL = os.getenv("PROXY", "")
+NUM = os.getenv("NUM")
+TG_TOKEN = os.getenv("TG_TOKEN")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
-TARGET = f"https://client.falixnodes.net/timer?id={NUM}"
+TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
+# ===========================================
 
-# Whole-flow attempts. A failed backend renewal must start over so that
-# the page receives a fresh Turnstile state/token.
-MAX_FLOW_ATTEMPTS = 3
+# ========== 时间字符串解析工具 ==========
+def parse_time_to_seconds(time_str: str) -> int:
+    """将获取到的文本时间转换为秒数，便于进行严格的大小比对"""
+    if not time_str or time_str == "未知":
+        return -1
+    total_seconds = 0
+    d_match = re.search(r'(\d+)\s*days?', time_str, re.IGNORECASE)
+    h_match = re.search(r'(\d+)\s*hours?', time_str, re.IGNORECASE)
+    m_match = re.search(r'(\d+)\s*minutes?', time_str, re.IGNORECASE)
+    s_match = re.search(r'(\d+)\s*seconds?', time_str, re.IGNORECASE)
+    
+    if d_match: total_seconds += int(d_match.group(1)) * 86400
+    if h_match: total_seconds += int(h_match.group(1)) * 3600
+    if m_match: total_seconds += int(m_match.group(1)) * 60
+    if s_match: total_seconds += int(s_match.group(1))
+    
+    return total_seconds
 
-# Turnstile waiting behavior.
-TURNSTILE_TIMEOUT = 70
-TURNSTILE_CLICK_INTERVAL = 5
-
-# After a click we keep observing the page before doing a hard reload.
-POST_CLICK_OBSERVE_SECONDS = 25
-FINAL_RELOAD_WAIT_SECONDS = 7
-
-# A successful Falix renewal normally resets the timer close to one hour.
-# We do not require an exact 60:00 because seconds elapse while checking.
-SUCCESS_MIN_GAIN_SECONDS = 120
-SUCCESS_NEAR_ONE_HOUR_SECONDS = 55 * 60
-
-
-def parse_timer_seconds(text: str) -> Optional[int]:
-    """Parse strings such as '59 minutes 40 seconds' into seconds."""
-    if not text:
-        return None
-
-    value = text.strip().lower()
-
-    # Support English timer text used by Falix.
-    hour_match = re.search(r"(\d+)\s*(?:hour|hours|hr|hrs)", value)
-    minute_match = re.search(r"(\d+)\s*(?:minute|minutes|min|mins)", value)
-    second_match = re.search(r"(\d+)\s*(?:second|seconds|sec|secs)", value)
-
-    if hour_match or minute_match or second_match:
-        hours = int(hour_match.group(1)) if hour_match else 0
-        minutes = int(minute_match.group(1)) if minute_match else 0
-        seconds = int(second_match.group(1)) if second_match else 0
-        return hours * 3600 + minutes * 60 + seconds
-
-    # Fallback for HH:MM:SS / MM:SS.
-    colon = re.search(r"\b(\d{1,3}):(\d{2})(?::(\d{2}))?\b", value)
-    if colon:
-        if colon.group(3) is not None:
-            return int(colon.group(1)) * 3600 + int(colon.group(2)) * 60 + int(colon.group(3))
-        return int(colon.group(1)) * 60 + int(colon.group(2))
-
-    return None
-
-
-def timer_increased_enough(before_text: str, after_text: str) -> Tuple[bool, Optional[int], Optional[int]]:
-    """Return whether the server-side timer really increased."""
-    before = parse_timer_seconds(before_text)
-    after = parse_timer_seconds(after_text)
-
-    if before is None or after is None:
-        return False, before, after
-
-    # Normal success: timer jumps upward by a meaningful amount.
-    if after >= before + SUCCESS_MIN_GAIN_SECONDS:
-        return True, before, after
-
-    # Extra tolerance for a renewal that lands near 60 minutes.
-    # This also handles some cases where the pre-read happened late.
-    if before < SUCCESS_NEAR_ONE_HOUR_SECONDS and after >= SUCCESS_NEAR_ONE_HOUR_SECONDS:
-        return True, before, after
-
-    return False, before, after
-
-
-def turnstile_token_value(sb) -> str:
-    """Read only the real cf-turnstile-response token.
-
-    Do not use a generic '#success' element as proof; that can create a
-    false positive while the Add Time button is still legitimately disabled.
-    """
+# ========== 核心 CF 打勾逻辑 ==========
+def _turnstile_token_ready(sb) -> bool:
+    # 彻底移除对 #success 的依赖，只认真正的 cf-turnstile-response
     try:
-        token = sb.execute_script(
-            """
-            const el = document.querySelector('input[name="cf-turnstile-response"]');
-            return el ? (el.value || '') : '';
-            """
-        )
-        return (token or "").strip()
-    except Exception:
-        return ""
+        token_ok = sb.execute_script("""
+            var inp = document.querySelector("input[name='cf-turnstile-response']");
+            return inp && inp.value && inp.value.length > 20;
+        """)
+        if token_ok: return True
+    except Exception: pass
+    return False
 
-
-def turnstile_ready(sb) -> bool:
-    return len(turnstile_token_value(sb)) > 20
-
-
-def wait_turnstile(sb, timeout: int = TURNSTILE_TIMEOUT) -> bool:
-    """Keep the old Aug-22 style UC interaction, but accept success only
-    when a real Turnstile response token exists.
-    """
-    print("[INFO] Waiting for Cloudflare Turnstile to become ready...", flush=True)
+def _try_click_turnstile(sb) -> bool:
+    try: sb.uc_gui_click_captcha()
+    except Exception: pass
 
     try:
-        sb.execute_script(
-            """
-            const el = document.querySelector('.cf-turnstile') ||
-                       document.querySelector('iframe[src*="challenges.cloudflare"]');
-            if (el) el.scrollIntoView({block: 'center', inline: 'center'});
-            """
-        )
+        if sb.is_element_present("iframe[src*='challenges.cloudflare']"):
+            sb.switch_to_frame("iframe[src*='challenges.cloudflare']")
+            sb.click("input[type='checkbox'], .cb-lb, .mark", timeout=2)
+            sb.switch_to_default_content()
+            return True
     except Exception:
-        pass
+        try: sb.switch_to_default_content()
+        except Exception: pass
+
+    try:
+        sb.execute_script("""
+            var ts = document.querySelector('.cf-turnstile');
+            if (ts) ts.click();
+        """)
+    except Exception: pass
+
+    return False
+
+def wait_turnstile(sb, timeout: int = 60) -> bool:
+    print("[INFO] 正在耐心等待 Cloudflare 验证码完全加载喵...")
+    time.sleep(10)
+    
+    try:
+        sb.execute_script("""
+            var ts = document.querySelector('.cf-turnstile') || document.querySelector('iframe[src*="challenges.cloudflare"]');
+            if (ts) ts.scrollIntoView({block:'center'});
+        """)
+    except Exception: pass
 
     start = time.time()
-    last_click = 0.0
+    last_click = 0
 
     while time.time() - start < timeout:
-        if turnstile_ready(sb):
-            print("[INFO] Turnstile token confirmed.", flush=True)
+        if _turnstile_token_ready(sb):
+            print("[INFO] ✅ Turnstile 真正获取到有效 Token 喵！")
+            time.sleep(3) 
             return True
 
         now = time.time()
-        if now - last_click >= TURNSTILE_CLICK_INTERVAL:
-            try:
-                sb.uc_gui_click_captcha()
-            except Exception:
-                pass
+        if now - last_click >= 4:
+            print("[INFO] 尝试戳一下中间的框框...")
+            _try_click_turnstile(sb)
             last_click = now
 
         time.sleep(1)
 
-    return turnstile_ready(sb)
+    return _turnstile_token_ready(sb)
 
-
-def get_timer_text(sb, timeout: int = 15) -> str:
-    deadline = time.time() + timeout
-
-    while time.time() < deadline:
+# ========== 动态时间捕手 ==========
+def get_time_safely(sb, timeout: int = 15) -> str:
+    start = time.time()
+    while time.time() - start < timeout:
         try:
-            text = sb.execute_script(
-                """
-                const el = document.querySelector('#timer-page-countdown');
-                return el ? ((el.innerText || el.textContent || '').trim()) : '';
-                """
-            )
-            if text and parse_timer_seconds(text) is not None:
-                return text.strip()
-        except Exception:
-            pass
+            raw_text = sb.execute_script("""
+                var el = document.querySelector('#timer-page-countdown');
+                return el ? (el.innerText || el.textContent).trim() : '';
+            """)
+            if raw_text and any(char.isdigit() for char in raw_text):
+                return raw_text
+        except Exception: pass
         time.sleep(1)
-
-    return "unknown"
-
-
-def current_url(sb) -> str:
-    try:
-        return (sb.get_current_url() or "").strip()
-    except Exception:
-        return ""
-
-
-def bad_redirect(url: str) -> bool:
-    value = (url or "").lower()
-    return "/auth/login" in value or "google_vignette" in value
-
-
-def add_button_state(sb) -> dict:
-    """Return the real browser state of #timer-page-btn."""
-    try:
-        state = sb.execute_script(
-            """
-            const btn = document.querySelector('#timer-page-btn');
-            if (!btn) return {exists:false};
-            const st = window.getComputedStyle(btn);
-            const r = btn.getBoundingClientRect();
-            return {
-                exists: true,
-                disabled: !!btn.disabled || btn.hasAttribute('disabled'),
-                ariaDisabled: (btn.getAttribute('aria-disabled') || '').toLowerCase() === 'true',
-                visible: st.display !== 'none' && st.visibility !== 'hidden' &&
-                         Number(st.opacity || '1') > 0 && r.width > 0 && r.height > 0,
-                text: (btn.innerText || btn.textContent || '').trim()
-            };
-            """
-        )
-        return state if isinstance(state, dict) else {"exists": False}
-    except Exception:
-        return {"exists": False}
-
-
-def wait_add_button_ready(sb, timeout: int = 20) -> bool:
-    """Wait until the page itself enables Add Time.
-
-    Important: never remove the disabled attribute. If the page still has the
-    button disabled, that means the frontend/backend state is not ready.
-    """
-    deadline = time.time() + timeout
-
-    while time.time() < deadline:
-        if bad_redirect(current_url(sb)):
-            return False
-
-        # The token must still be present at the moment we click.
-        if not turnstile_ready(sb):
-            time.sleep(1)
-            continue
-
-        state = add_button_state(sb)
-        if (
-            state.get("exists")
-            and state.get("visible")
-            and not state.get("disabled")
-            and not state.get("ariaDisabled")
-        ):
-            return True
-
-        time.sleep(1)
-
-    return False
-
+    return "未知"
+# ==========================================
 
 class FalixNodesRenewal:
     def __init__(self):
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
-        self.artifact_dir = os.path.join(self.base_dir, "artifacts")
-        os.makedirs(self.artifact_dir, exist_ok=True)
+        self.BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        self.screenshot_dir = os.path.join(self.BASE_DIR, "artifacts")
+        if not os.path.exists(self.screenshot_dir):
+            os.makedirs(self.screenshot_dir)
 
-    def log(self, message: str):
-        stamp = time.strftime("%H:%M:%S")
-        print(f"[{stamp}] {message}", flush=True)
+    def log(self, msg):
+        timestamp = time.strftime('%H:%M:%S')
+        print(f"[{timestamp}] {msg}", flush=True)
 
-    def shot(self, sb, name: str) -> str:
-        path = os.path.join(self.artifact_dir, name)
-        try:
-            sb.save_screenshot(path)
-        except Exception:
-            pass
-        return path
-
-    def send_telegram(self, message: str, photo_path: Optional[str] = None):
+    def send_telegram_notify(self, message, photo_path=None):
         if not TG_TOKEN or not TG_CHAT_ID:
-            self.log("[WARN] Telegram is not configured; notification skipped.")
+            self.log("[⚠️] 未配置 TG_TOKEN，跳过推送喵。")
             return
-
         try:
             if photo_path and os.path.exists(photo_path):
-                endpoint = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
-                with open(photo_path, "rb") as fh:
-                    response = requests.post(
-                        endpoint,
-                        data={"chat_id": TG_CHAT_ID, "caption": message},
-                        files={"photo": fh},
-                        timeout=20,
-                    )
+                url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
+                with open(photo_path, 'rb') as f:
+                    requests.post(url, data={'chat_id': TG_CHAT_ID, 'caption': message}, files={'photo': f})
             else:
-                endpoint = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-                response = requests.post(
-                    endpoint,
-                    data={"chat_id": TG_CHAT_ID, "text": message},
-                    timeout=20,
-                )
-
-            if 200 <= response.status_code < 300:
-                self.log("[OK] Telegram notification sent.")
-            else:
-                self.log(f"[WARN] Telegram HTTP {response.status_code}: {response.text[:200]}")
-        except Exception as exc:
-            self.log(f"[WARN] Telegram notification failed: {exc}")
-
-    def open_target(self, sb, reconnect_time: int = 25, settle: int = 7):
-        self.log(f"[URL] Opening target: {TARGET}")
-        sb.uc_open_with_reconnect(TARGET, reconnect_time=reconnect_time)
-        time.sleep(settle)
-
-    def detect_ip(self, sb):
-        self.log("[NET] Detecting egress IP...")
-        try:
-            sb.open("https://api.ipify.org?format=json")
-            body = sb.get_text("body")
-            data_match = re.search(r"\{.*\}", body, flags=re.S)
-            ip_value = json.loads(data_match.group(0)).get("ip", "unknown") if data_match else "unknown"
-            parts = ip_value.split(".")
-            if len(parts) == 4:
-                masked = f"{parts[0]}.{parts[1]}.***.{parts[-1]}"
-            else:
-                masked = ip_value
-            self.log(f"[OK] Egress IP: {masked}")
-        except Exception as exc:
-            self.log(f"[WARN] Egress IP detection skipped: {exc}")
-
-    def observe_after_click(self, sb, before_text: str) -> Tuple[bool, str]:
-        """Watch for a real timer jump without immediately reloading the page."""
-        deadline = time.time() + POST_CLICK_OBSERVE_SECONDS
-        last_text = "unknown"
-
-        while time.time() < deadline:
-            url = current_url(sb)
-
-            # Some successful flows redirect away. Give the request a moment,
-            # then re-open the timer page and verify server-side state.
-            if bad_redirect(url):
-                self.log(f"[INFO] Redirect detected after click: {url}")
-                time.sleep(3)
-                break
-
-            now_text = get_timer_text(sb, timeout=2)
-            if now_text != "unknown":
-                last_text = now_text
-                ok, before_sec, after_sec = timer_increased_enough(before_text, now_text)
-                if ok:
-                    gain = (after_sec - before_sec) if before_sec is not None and after_sec is not None else 0
-                    self.log(f"[OK] Timer increased in-page by about {gain} seconds.")
-                    return True, now_text
-
-            time.sleep(2)
-
-        # Final authoritative check: reload the public timer page and read the
-        # server-side value. This is the key false-success guard.
-        self.log("[CHECK] Reloading timer page to verify server-side result...")
-        try:
-            sb.uc_open_with_reconnect(TARGET, reconnect_time=25)
-            time.sleep(FINAL_RELOAD_WAIT_SECONDS)
-        except Exception as exc:
-            self.log(f"[WARN] Final reload raised: {exc}")
-
-        after_text = get_timer_text(sb, timeout=15)
-        ok, before_sec, after_sec = timer_increased_enough(before_text, after_text)
-
-        if ok:
-            gain = (after_sec - before_sec) if before_sec is not None and after_sec is not None else 0
-            self.log(f"[OK] Server-side renewal confirmed; gain is about {gain} seconds.")
-            return True, after_text
-
-        self.log(
-            f"[FAIL] Server-side timer did not increase. before={before_text!r}, after={after_text!r}"
-        )
-        return False, after_text
-
-    def run_one_flow(self, sb, flow_no: int) -> Tuple[bool, str, str, str]:
-        """Return (success, reason, before, after)."""
-        self.log("")
-        self.log(f"[FLOW] Starting full renewal attempt {flow_no}/{MAX_FLOW_ATTEMPTS}")
-
-        self.open_target(sb)
-
-        url = current_url(sb)
-        if bad_redirect(url):
-            return False, f"redirect_before_timer:{url}", "unknown", "unknown"
-
-        # Confirm timer exists before doing anything else.
-        before = get_timer_text(sb, timeout=15)
-        if before == "unknown":
-            try:
-                body_text = sb.get_text("body").lower()
-            except Exception:
-                body_text = ""
-
-            if (
-                "no active timer" in body_text
-                or "back to dashboard" in body_text
-                or "no active server" in body_text
-            ):
-                return False, "server_inactive", "unknown", "unknown"
-
-            return False, "timer_not_found", "unknown", "unknown"
-
-        self.log(f"[TIME] Before renewal: {before}")
-
-        # Wait for a real CF token. No '#success' fallback is accepted.
-        self.log("[CF] Waiting for Turnstile...")
-        if not wait_turnstile(sb, timeout=TURNSTILE_TIMEOUT):
-            return False, "turnstile_token_missing", before, "unknown"
-
-        # The page may redirect after token processing.
-        time.sleep(2)
-        url = current_url(sb)
-        if bad_redirect(url):
-            return False, f"redirect_after_turnstile:{url}", before, "unknown"
-
-        # Do not force-enable the button. Wait until the site itself says the
-        # button is ready; otherwise a DOM click can be a no-op server-side.
-        self.log("[BTN] Waiting for Add Time button to become legitimately enabled...")
-        if not wait_add_button_ready(sb, timeout=20):
-            state = add_button_state(sb)
-            self.log(f"[FAIL] Add Time button never became ready: {state}")
-            return False, "add_button_not_ready", before, "unknown"
-
-        # Use a normal Selenium click rather than JS btn.click() and never
-        # remove the disabled attribute.
-        self.log("[CLICK] Clicking Add Time...")
-        try:
-            sb.execute_script(
-                """
-                const btn = document.querySelector('#timer-page-btn');
-                if (btn) btn.scrollIntoView({block:'center', inline:'center'});
-                """
-            )
-            time.sleep(1)
-            sb.click("#timer-page-btn", timeout=10)
-        except Exception as exc:
-            return False, f"native_click_failed:{exc}", before, "unknown"
-
-        self.log("[CLICK] Browser click completed; now verifying backend result...")
-
-        success, after = self.observe_after_click(sb, before)
-        if success:
-            return True, "confirmed", before, after
-
-        return False, "timer_not_increased", before, after
+                url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+                requests.post(url, data={'chat_id': TG_CHAT_ID, 'text': message})
+            self.log("[✅] TG 推送已发送")
+        except Exception as e:
+            self.log(f"[❌] TG 推送失败: {e}")
 
     def run(self):
-        self.log("=" * 56)
-        self.log("FalixNodes - Aug22 stable flow + verified renewal result")
-        self.log("=" * 56)
-
+        self.log("=" * 40)
+        self.log("[🚀] FalixNodes - 严谨时间校验版 (拒绝假成功)喵")
+        self.log("=" * 40)
+        
         with SB(
             uc=True,
-            test=True,
+            test=True, 
             headed=True,
             headless=False,
             xvfb=False,
-            chromium_arg=(
-                "--no-sandbox,--disable-dev-shm-usage,--disable-gpu,"
-                "--window-position=0,0,--start-maximized"
-            ),
-            proxy=PROXY_URL if PROXY_URL else None,
+            chromium_arg="--no-sandbox,--disable-dev-shm-usage,--disable-gpu,--window-position=0,0,--start-maximized",
+            proxy=PROXY_URL if PROXY_URL else None
         ) as sb:
             try:
-                self.log("[OK] Browser started.")
-                self.detect_ip(sb)
+                self.log("[✅] 浏览器已启动！")
+                
+                self.log("[🌍] 正在检测出口 IP...")
+                try:
+                    sb.open("https://api.ipify.org?format=json")
+                    ip_val = json.loads(re.search(r'\{.*\}', sb.get_text("body")).group(0)).get('ip', 'Unknown')
+                    parts = ip_val.split('.')
+                    self.log(f"[✅] 当前出口 IP: {parts[0]}.{parts[1]}.***.{parts[-1]}")
+                except:
+                    self.log("[⚠️] IP 检测跳过...")
+                
+                # 最多尝试 3 个完整的大循环
+                max_loops = 3
+                for main_loop in range(1, max_loops + 1):
+                    self.log(f"\n[🌟] 开始第 {main_loop} 轮完整保活流程喵...")
+                    
+                    self.log(f"[🔗] 强制访问目标链接: {TAGET}")
+                    sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
+                    time.sleep(8)
+                    
+                    url = sb.get_current_url()
+                    if "login" in url or "google_vignette" in url:
+                        self.log(f"[⚠️] 警报！一进来网址不对 ({url})！")
+                        if main_loop == max_loops:
+                            self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 连续重定向，IP被风控喵！")
+                            return
+                        else:
+                            continue 
 
-                last_reason = "unknown"
-                last_before = "unknown"
-                last_after = "unknown"
+                    self.log("[🔍] 正在观察服务器运行状态...")
+                    is_alive = False
+                    try:
+                        sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
+                        is_alive = True
+                    except: pass
 
-                for flow_no in range(1, MAX_FLOW_ATTEMPTS + 1):
-                    success, reason, before, after = self.run_one_flow(sb, flow_no)
-                    last_reason = reason
-                    last_before = before
-                    last_after = after
+                    if not is_alive:
+                        body_text = sb.get_text("body").lower()
+                        if "no active timer" in body_text or "back to dashboard" in body_text or "未找到活动" in body_text:
+                            self.log("[❌] 确认服务器真的停机了喵！")
+                            self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！")
+                            return
+                        else:
+                            self.log("[⚠️] 没看到倒计时和停机提示，尝试推进...")
+                    else:
+                        self.log("[✅] 确认看到倒计时啦！")
 
-                    if success:
-                        finish = self.shot(sb, "finish.png")
-                        self.log("[DONE] Renewal is confirmed by timer increase.")
-                        self.send_telegram(
-                            "🎉 FalixNodes 保活程序\n"
-                            f"🖥️编号: {NUM}\n"
-                            f"🕒保活前剩余时间: {before}\n"
-                            f"🚀保活后剩余时间: {after}\n"
-                            "✅状态: 已确认服务器端时间增加",
-                            finish,
-                        )
-                        return
+                    # 获取操作前的基准时间
+                    self.log("[🕒] 正在捕获加时前基准时间...")
+                    before = get_time_safely(sb, timeout=15)
+                    before_sec = parse_time_to_seconds(before)
+                    self.log(f"[🕒] 当前剩余时间: {before} ({before_sec}秒)")
 
-                    fail_shot = self.shot(sb, f"attempt_{flow_no}_failed.png")
-                    self.log(f"[RETRY] Attempt {flow_no} failed: {reason}")
+                    cf_passed = False
+                    for attempt in range(1, 4):
+                        self.log(f"\n[⏳] 第 {attempt} 次尝试破解 Cloudflare 验证码喵...")
+                        if wait_turnstile(sb, timeout=60):
+                            cf_passed = True
+                            break
+                        if attempt < 3:
+                            self.log(f"[🔄] 验证码未过，刷新页面重试！")
+                            sb.refresh()
+                            time.sleep(10)
+                    
+                    if not cf_passed:
+                        self.log("[❌] 打勾失败，放弃当前大循环...")
+                        if main_loop == max_loops:
+                            self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 打勾超时！")
+                            return
+                        continue
 
-                    if reason == "server_inactive":
-                        self.send_telegram(
-                            "⚠️ FalixNodes 保活程序\n"
-                            f"🖥️编号: {NUM}\n"
-                            "❌续费失败: 当前没有活动计时器/服务器可能已停止",
-                            fail_shot,
-                        )
-                        return
+                    self.log("[⏳] 正在等待网页前端自然解禁加时按钮 (最长 30 秒)...")
+                    btn_ready = False
+                    for _ in range(30):
+                        is_disabled = sb.execute_script("var btn = document.querySelector('#timer-page-btn'); return btn ? btn.hasAttribute('disabled') : true;")
+                        if not is_disabled:
+                            btn_ready = True
+                            break
+                        time.sleep(1)
 
-                    if flow_no < MAX_FLOW_ATTEMPTS:
-                        self.log("[RETRY] Starting over from the timer page with a fresh page state...")
-                        time.sleep(5)
+                    if not btn_ready:
+                        self.log("[⚠️] 按钮未自然解禁，可能是时间充足触发冷却，或者 Token 未被后端接受。放弃暴力强点。")
+                    else:
+                        self.log("[🖱️] 准备使用原生点击触发 Addtime...")
+                        try:
+                            # 正常 Selenium 点击，如果被遮挡则使用纯净 JS click，但绝不 removeAttribute
+                            sb.click("#timer-page-btn", timeout=5)
+                            self.log("[✅] 按钮点击完毕！")
+                        except Exception:
+                            sb.execute_script("document.querySelector('#timer-page-btn').click();")
+                            self.log("[✅] 按钮点击完毕 (JS Fallback)！")
 
-                final_shot = self.shot(sb, "renew_failed.png")
-                self.log("[FAIL] All renewal attempts exhausted.")
-                self.send_telegram(
-                    "🚨 FalixNodes 保活程序\n"
-                    f"🖥️编号: {NUM}\n"
-                    f"❌续费失败原因: {last_reason}\n"
-                    f"🕒最后一次保活前: {last_before}\n"
-                    f"🕒最后一次检查后: {last_after}\n"
-                    "⚠️ 未检测到服务器端时间增加，已停止误报成功",
-                    final_shot,
-                )
+                    self.log("[⏳] 正在等待 10 秒钟，让服务器消化加时请求...")
+                    time.sleep(10) 
 
-            except Exception as exc:
-                self.log(f"[ERROR] Unexpected exception: {exc}")
-                traceback.print_exc()
-                error_shot = self.shot(sb, "error.png")
-                self.send_telegram(
-                    "🚨 FalixNodes 保活程序\n"
-                    f"🖥️编号: {NUM}\n"
-                    f"❌运行异常: {exc}",
-                    error_shot,
-                )
+                    self.log("[🔗] 时间到！重新加载获取后端最新时间...")
+                    sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
+                    time.sleep(8)
+                    
+                    self.log("[🕒] 正在捕获加时后的最新时间...")
+                    after = get_time_safely(sb, timeout=15)
+                    after_sec = parse_time_to_seconds(after)
+                    self.log(f"[🕒] 最新剩余时间: {after} ({after_sec}秒)")
 
+                    # 核心校验逻辑：只有时间严格增加，才算真正成功
+                    if after_sec > before_sec and after_sec > 0:
+                        self.log(f"[✅] 时间已确认增加 ({before_sec} -> {after_sec})，续费真正成功！")
+                        finish_screenshot = f"{self.screenshot_dir}/finish.png"
+                        sb.save_screenshot(finish_screenshot)
+                        self.send_telegram_notify(f"🎉FalixNodes 保活程序\n🖥️编号: {NUM}\n🕒保活前: {before}\n🚀保活后: {after}", finish_screenshot)
+                        break 
+                    else:
+                        self.log(f"[❌] 虚假成功预警：时间并未增加 ({before} -> {after})！")
+                        if main_loop == max_loops:
+                            fail_screenshot = f"{self.screenshot_dir}/fail.png"
+                            sb.save_screenshot(fail_screenshot)
+                            self.send_telegram_notify(f"❌续费失败\n🖥️编号: {NUM}\n⚠️ 未检测到服务器端时间增加，已停止误报成功。\n🕒保活前: {before}\n🚀保活后: {after}", fail_screenshot)
+                        else:
+                            self.log("[🔄] 准备进入下一轮大循环重试...")
+
+            except Exception as e:
+                self.log(f"[❌] 运行异常: {e}")
+                sb.save_screenshot(f"{self.screenshot_dir}/error.png")
 
 if __name__ == "__main__":
     FalixNodesRenewal().run()
