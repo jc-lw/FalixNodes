@@ -113,7 +113,7 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
 
     return _turnstile_token_ready(sb)
 
-# ========== 动态时间捕手 (JS 强穿透，无视遮挡) ==========
+# ========== 动态时间捕手 ==========
 def get_time_safely(sb, timeout: int = 20) -> str:
     start = time.time()
     while time.time() - start < timeout:
@@ -160,7 +160,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 严密逻辑拦截护航版喵")
+        self.log("[🚀] FalixNodes - 终极无死角眼见为实版喵")
         self.log("=" * 40)
         
         with SB(
@@ -203,14 +203,28 @@ class FalixNodesRenewal:
                             self.log("[🔄] 准备重新开启第二轮大循环喵...")
                             continue 
 
-                    self.log("[🔍] 正在核实服务器静态文本...")
-                    body_text = sb.get_text("body").lower()
-                    if "no active timer" in body_text or "back to dashboard" in body_text or "未找到活动" in body_text:
-                        self.log("[❌] 看到明确文字：确认服务器真的停机了喵！")
-                        dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
-                        sb.save_screenshot(dead_screenshot)
-                        self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！", dead_screenshot)
-                        return
+                    # 🚨 把喵酱删掉的“眼见为实”防线重新请回来 🚨
+                    self.log("[🔍] 正在观察服务器运行状态...")
+                    is_alive = False
+                    try:
+                        # 必须先等 15 秒看倒计时框框出不出来
+                        sb.wait_for_element_visible("#timer-page-countdown", timeout=15)
+                        is_alive = True
+                    except Exception: pass
+
+                    if not is_alive:
+                        # 15 秒了连个框都没有，再去判断是不是停机文字
+                        body_text = sb.get_text("body").lower()
+                        if "no active timer" in body_text or "back to dashboard" in body_text or "未找到活动" in body_text:
+                            self.log("[❌] 确认服务器真的停机了喵！")
+                            dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
+                            sb.save_screenshot(dead_screenshot)
+                            self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！", dead_screenshot)
+                            return
+                        else:
+                            self.log("[⚠️] 没看到倒计时，也没看到停机提示，继续强闯 CF 喵...")
+                    else:
+                        self.log("[✅] 确认看到倒计时啦！服务器存活喵！")
 
                     cf_passed = False
                     for attempt in range(1, 4):
@@ -241,7 +255,6 @@ class FalixNodesRenewal:
                     self.log("[⏳] 正在让网页前端消化验证码 Token，强行冷静 3 秒...")
                     time.sleep(3)
 
-                    # 🚨 终极拦截点：只有抓出数字，才敢继续点加时！🚨
                     self.log("[🕒] 正在捕获当前剩余时间的数字...")
                     before = get_time_safely(sb, timeout=20)
                     self.log(f"[🕒] 当前剩余时间: {before}")
