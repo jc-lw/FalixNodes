@@ -28,18 +28,22 @@ TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
 def _turnstile_token_ready(sb) -> bool:
     try:
         token_ok = sb.execute_script("""
-            var inp = document.querySelector("input[name='cf-turnstile-response']");
-            return inp && inp.value && inp.value.length > 20;
+            return (function() {
+                var inp = document.querySelector("input[name='cf-turnstile-response']");
+                return !!(inp && inp.value && inp.value.length > 20);
+            })();
         """)
         if token_ok: return True
     except Exception: pass
 
     try:
         success_visible = sb.execute_script("""
-            var s = document.getElementById('success');
-            if (!s) return false;
-            var style = window.getComputedStyle(s);
-            return style.display !== 'none' && style.visibility !== 'hidden';
+            return (function() {
+                var s = document.getElementById('success');
+                if (!s) return false;
+                var style = window.getComputedStyle(s);
+                return style.display !== 'none' && style.visibility !== 'hidden';
+            })();
         """)
         if success_visible: return True
     except Exception: pass
@@ -104,8 +108,10 @@ def get_time_safely(sb, timeout: int = 15) -> str:
     while time.time() - start < timeout:
         try:
             raw_text = sb.execute_script("""
-                var el = document.querySelector('#timer-page-countdown');
-                return el ? (el.innerText || el.textContent).trim() : '';
+                return (function() {
+                    var el = document.querySelector('#timer-page-countdown');
+                    return el ? (el.innerText || el.textContent).trim() : '';
+                })();
             """)
             if raw_text and any(char.isdigit() for char in raw_text):
                 return raw_text
@@ -143,7 +149,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 大循环重置 + 智能解锁版喵")
+        self.log("[🚀] FalixNodes - 大循环重置 + 智能解锁终极版喵")
         self.log("=" * 40)
         
         with SB(
@@ -249,14 +255,23 @@ class FalixNodesRenewal:
                     before = get_time_safely(sb, timeout=15)
                     self.log(f"[🕒] 当前剩余时间: {before}")
 
-                    # ================= 智能解锁与点击 =================
+                    # ================= 智能解锁与点击 (彻底修复 JS 语法 Bug) =================
                     self.log("[⏳] 正在等待网页前端消化 Token，观察加时按钮是否自然解锁...")
                     btn_ready = False
                     for _ in range(12):  
-                        is_disabled = sb.execute_script("var btn = document.querySelector('#timer-page-btn'); return btn ? btn.hasAttribute('disabled') : true;")
-                        if not is_disabled:
-                            btn_ready = True
-                            break
+                        try:
+                            # 🚨 换成最安全的 IIFE 闭包写法，绝对不会再报 Illegal return statement
+                            is_disabled = sb.execute_script("""
+                                return (function() {
+                                    var btn = document.querySelector('#timer-page-btn');
+                                    return btn ? btn.hasAttribute('disabled') : true;
+                                })();
+                            """)
+                            if not is_disabled:
+                                btn_ready = True
+                                break
+                        except Exception:
+                            pass
                         time.sleep(1)
 
                     self.log("[🖱️] 准备点击添加时间 (Addtime)...")
@@ -265,7 +280,7 @@ class FalixNodesRenewal:
                             sb.execute_script("document.querySelector('#timer-page-btn').click();")
                             self.log("[✅] 按钮已自然解锁，正常执行点击加时喵！")
                         else:
-                            self.log("[⚠️] 按钮死活不解锁（大概率是时间还剩很多触发了冷却期），强行点一次碰运气喵...")
+                            self.log("[⚠️] 按钮死活不解锁（大概率触发了冷却期），强行点一次碰运气喵...")
                             sb.execute_script("""
                                 var btn = document.querySelector('#timer-page-btn');
                                 if(btn) { btn.removeAttribute('disabled'); btn.click(); }
