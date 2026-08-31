@@ -163,7 +163,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 智能防冷切完全体喵")
+        self.log("[🚀] FalixNodes - 终极修复大一统版本喵")
         self.log("=" * 40)
         
         with SB(
@@ -206,17 +206,27 @@ class FalixNodesRenewal:
                             self.log("[🔄] 准备重新开启第二轮大循环喵...")
                             continue 
 
-                    self.log("[🔍] 正在扫描网页底层状态...")
-                    time.sleep(3)
-                    body_text = sb.get_text("body").lower()
-                    if "no active timer" in body_text or "back to dashboard" in body_text or "未找到活动" in body_text:
-                        self.log("[❌] 发现明确停机提示：确认服务器真的停机了喵！")
-                        dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
-                        sb.save_screenshot(dead_screenshot)
-                        self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！", dead_screenshot)
-                        return
+                    # 🚨 终极防线：绝对不删的眼见为实代码 🚨
+                    self.log("[🔍] 正在寻找倒计时框框...")
+                    is_alive = False
+                    try:
+                        sb.wait_for_element_visible("#timer-page-countdown", timeout=15)
+                        is_alive = True
+                    except Exception: pass
+
+                    if not is_alive:
+                        self.log("[⚠️] 15秒都没看到时间框，检查是否停机...")
+                        body_text = sb.get_text("body").lower()
+                        if "no active timer" in body_text or "back to dashboard" in body_text or "未找到活动" in body_text:
+                            self.log("[❌] 发现明确停机提示：确认服务器真的停机了喵！")
+                            dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
+                            sb.save_screenshot(dead_screenshot)
+                            self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！", dead_screenshot)
+                            return
+                        else:
+                            self.log("[⚠️] 没看到停机提示，可能卡了，继续强闯 CF 喵...")
                     else:
-                        self.log("[✅] 未发现停机提示，网页基础加载正常喵！")
+                        self.log("[✅] 确认看到倒计时啦！服务器存活喵！")
 
                     cf_passed = False
                     for attempt in range(1, 4):
@@ -289,9 +299,9 @@ class FalixNodesRenewal:
                         sb.execute_script("document.querySelector('#timer-page-btn').click();")
                         self.log("[✅] 按钮已自然解锁，正常执行点击加时喵！")
                     else:
-                        self.log("[⚠️] 按钮死活不解锁！大概率是剩余时间超过50分钟触发了官方冷却限制喵！")
+                        self.log("[⚠️] 按钮死活不解锁！大概率是触发了官方防滥用冷却限制喵！")
                         self.log("[⚠️] 为避免提交无效表单被封，本次放弃强行点击，保持当前时间退出喵。")
-                        self.send_telegram_notify(f"🛡️ FalixNodes 保活防打扰\n🖥️ 编号: {NUM}\n🕒 当前时间: {before}\nℹ️ 剩余时间充足，由于官方冷却限制，按钮未能解锁，本次跳过加时喵！")
+                        self.send_telegram_notify(f"🛡️ FalixNodes 保活防打扰\n🖥️ 编号: {NUM}\n🕒 当前时间: {before}\nℹ️ 由于官方冷却限制，加时按钮未解锁，本次跳过强行点击喵！")
                         return
                     # ==================================================
                     
