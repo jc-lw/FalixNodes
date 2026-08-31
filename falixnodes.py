@@ -45,11 +45,10 @@ def parse_time_to_seconds(time_str: str) -> int:
 # ========== 核心 CF 打勾逻辑 ==========
 def _turnstile_token_ready(sb) -> bool:
     try:
+        # 退回最原始稳定的多行提取写法
         token_ok = sb.execute_script("""
-            return (function() {
-                var inp = document.querySelector("input[name='cf-turnstile-response']");
-                return !!(inp && inp.value && inp.value.length > 20);
-            })();
+            var inp = document.querySelector("input[name='cf-turnstile-response']");
+            return inp && inp.value && inp.value.length > 20;
         """)
         if token_ok: return True
     except Exception: pass
@@ -113,11 +112,10 @@ def get_time_safely(sb, timeout: int = 15) -> str:
     start = time.time()
     while time.time() - start < timeout:
         try:
+            # 🚨 还原回您 16:44 成功抓取时间的完美多行代码 🚨
             raw_text = sb.execute_script("""
-                return (function() {
-                    var el = document.querySelector('#timer-page-countdown');
-                    return el ? (el.innerText || el.textContent).trim() : '';
-                })();
+                var el = document.querySelector('#timer-page-countdown');
+                return el ? (el.innerText || el.textContent).trim() : '';
             """)
             if raw_text and any(char.isdigit() for char in raw_text):
                 return raw_text
@@ -155,7 +153,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 严谨时间校验 + 初始抢救防线版喵")
+        self.log("[🚀] FalixNodes - 大道至简原汁原味版喵")
         self.log("=" * 40)
         
         with SB(
@@ -214,17 +212,16 @@ class FalixNodesRenewal:
                     else:
                         self.log("[✅] 确认看到倒计时啦！")
 
-                    # 🚨 重构补回：初始时间安全拦截与抢救防线 🚨
                     self.log("[🕒] 正在捕获加时前基准时间...")
                     before = get_time_safely(sb, timeout=15)
                     
                     if before == "未知":
-                        self.log("[⚠️] 警报！初始时间未能加载出来（网络严重卡顿），尝试原位 F5 抢救喵...")
+                        self.log("[⚠️] 警报！初始时间未能加载出来，尝试原位 F5 抢救喵...")
                         sb.refresh()
                         time.sleep(10)
                         before = get_time_safely(sb, timeout=15)
                         if before == "未知":
-                            self.log("[❌] 抢救无效！连初始时间都读不到，强行打勾必然死循环。放弃本轮大循环！")
+                            self.log("[❌] 抢救无效！连初始时间都读不到。放弃本轮大循环！")
                             if main_loop == max_loops:
                                 self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：页面加载严重超时，无法读取时间数据喵！")
                                 return
@@ -255,11 +252,10 @@ class FalixNodesRenewal:
                     btn_ready = False
                     for _ in range(30):
                         try:
+                            # 🚨 抛弃单行报错写法，拆成多行安全写法 🚨
                             is_disabled = sb.execute_script("""
-                                return (function() {
-                                    var btn = document.querySelector('#timer-page-btn');
-                                    return btn ? btn.hasAttribute('disabled') : true;
-                                })();
+                                var btn = document.querySelector('#timer-page-btn');
+                                return btn ? btn.hasAttribute('disabled') : true;
                             """)
                             if not is_disabled:
                                 btn_ready = True
