@@ -24,26 +24,38 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
 # ===========================================
 
-# ========== 核心 CF 打勾逻辑 ==========
+# ========== 喵酱的无敌 Cloudflare 穿透模块 ==========
+def _unhide_turnstile(sb):
+    """把 ZamPTO 的神技搬过来：强行让被隐藏或缩小的 CF 框显形！"""
+    try:
+        sb.execute_script("""
+            document.querySelectorAll('iframe').forEach(function(f){
+                if (f.src && f.src.includes('challenges.cloudflare')) {
+                    f.style.width = '300px'; f.style.height = '65px';
+                    f.style.minWidth = '300px';
+                    f.style.visibility = 'visible'; f.style.opacity = '1';
+                    f.style.display = 'block';
+                }
+            });
+        """)
+    except Exception: pass
+
 def _turnstile_token_ready(sb) -> bool:
+    # 退回原版最稳妥的非闭包写法，防止 SeleniumBase 底层吞报错
     try:
         token_ok = sb.execute_script("""
-            return (function() {
-                var inp = document.querySelector("input[name='cf-turnstile-response']");
-                return !!(inp && inp.value && inp.value.length > 20);
-            })();
+            var inp = document.querySelector("input[name='cf-turnstile-response']");
+            return inp && inp.value && inp.value.length > 20;
         """)
         if token_ok: return True
     except Exception: pass
 
     try:
         success_visible = sb.execute_script("""
-            return (function() {
-                var s = document.getElementById('success');
-                if (!s) return false;
-                var style = window.getComputedStyle(s);
-                return style.display !== 'none' && style.visibility !== 'hidden';
-            })();
+            var s = document.getElementById('success');
+            if (!s) return false;
+            var style = window.getComputedStyle(s);
+            return style.display !== 'none' && style.visibility !== 'hidden';
         """)
         if success_visible: return True
     except Exception: pass
@@ -95,6 +107,7 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
         now = time.time()
         if now - last_click >= 4:
             print("[INFO] 尝试戳一下中间的框框...")
+            _unhide_turnstile(sb) # 🚨 每次点击前强制放大显形，防止戳空 🚨
             _try_click_turnstile(sb)
             last_click = now
 
@@ -107,6 +120,7 @@ def get_time_safely(sb, timeout: int = 15) -> str:
     start = time.time()
     while time.time() - start < timeout:
         try:
+            # 这里保留安全的闭包写法，因为它不涉及布尔值的模糊转换
             raw_text = sb.execute_script("""
                 return (function() {
                     var el = document.querySelector('#timer-page-countdown');
@@ -149,7 +163,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 大循环重置 + 智能解锁终极版喵")
+        self.log("[🚀] FalixNodes - 强制显形 + 闭包剥离版喵")
         self.log("=" * 40)
         
         with SB(
@@ -235,7 +249,7 @@ class FalixNodesRenewal:
                         self.log("[❌] 连续 3 次打勾失败，投降了喵...")
                         fail_screenshot = f"{self.screenshot_dir}/cf_fail.png"
                         sb.save_screenshot(fail_screenshot)
-                        self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 连续 3 次打勾超时！", fail_screenshot)
+                        self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 连续 3 次打勾超时！\n⚠️ 提示：您当前代理出口IP可能被CF拉黑，请尝试更换节点。", fail_screenshot)
                         return
 
                     self.log("[⏳] 正在让网页前端消化验证码 Token，强行冷静 3 秒...")
@@ -255,12 +269,11 @@ class FalixNodesRenewal:
                     before = get_time_safely(sb, timeout=15)
                     self.log(f"[🕒] 当前剩余时间: {before}")
 
-                    # ================= 智能解锁与点击 (彻底修复 JS 语法 Bug) =================
+                    # ================= 智能解锁与点击 =================
                     self.log("[⏳] 正在等待网页前端消化 Token，观察加时按钮是否自然解锁...")
                     btn_ready = False
                     for _ in range(12):  
                         try:
-                            # 🚨 换成最安全的 IIFE 闭包写法，绝对不会再报 Illegal return statement
                             is_disabled = sb.execute_script("""
                                 return (function() {
                                     var btn = document.querySelector('#timer-page-btn');
@@ -270,8 +283,7 @@ class FalixNodesRenewal:
                             if not is_disabled:
                                 btn_ready = True
                                 break
-                        except Exception:
-                            pass
+                        except Exception: pass
                         time.sleep(1)
 
                     self.log("[🖱️] 准备点击添加时间 (Addtime)...")
