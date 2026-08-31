@@ -26,7 +26,6 @@ TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
 
 # ========== 喵酱的无敌 Cloudflare 穿透模块 ==========
 def _unhide_turnstile(sb):
-    """把 ZamPTO 的神技搬过来：强行让被隐藏或缩小的 CF 框显形！"""
     try:
         sb.execute_script("""
             document.querySelectorAll('iframe').forEach(function(f){
@@ -41,11 +40,10 @@ def _unhide_turnstile(sb):
     except Exception: pass
 
 def _turnstile_token_ready(sb) -> bool:
-    # 退回原版最稳妥的非闭包写法，防止 SeleniumBase 底层吞报错
     try:
         token_ok = sb.execute_script("""
             var inp = document.querySelector("input[name='cf-turnstile-response']");
-            return inp && inp.value && inp.value.length > 20;
+            return !!(inp && inp.value && inp.value.length > 20);
         """)
         if token_ok: return True
     except Exception: pass
@@ -107,7 +105,7 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
         now = time.time()
         if now - last_click >= 4:
             print("[INFO] 尝试戳一下中间的框框...")
-            _unhide_turnstile(sb) # 🚨 每次点击前强制放大显形，防止戳空 🚨
+            _unhide_turnstile(sb) 
             _try_click_turnstile(sb)
             last_click = now
 
@@ -116,11 +114,10 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
     return _turnstile_token_ready(sb)
 
 # ========== 动态时间捕手 (JS 强穿透，无视遮挡) ==========
-def get_time_safely(sb, timeout: int = 15) -> str:
+def get_time_safely(sb, timeout: int = 20) -> str:
     start = time.time()
     while time.time() - start < timeout:
         try:
-            # 这里保留安全的闭包写法，因为它不涉及布尔值的模糊转换
             raw_text = sb.execute_script("""
                 return (function() {
                     var el = document.querySelector('#timer-page-countdown');
@@ -163,7 +160,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 强制显形 + 闭包剥离版喵")
+        self.log("[🚀] FalixNodes - 严密逻辑拦截护航版喵")
         self.log("=" * 40)
         
         with SB(
@@ -206,25 +203,14 @@ class FalixNodesRenewal:
                             self.log("[🔄] 准备重新开启第二轮大循环喵...")
                             continue 
 
-                    self.log("[🔍] 正在观察服务器运行状态...")
-                    is_alive = False
-                    try:
-                        sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
-                        is_alive = True
-                    except: pass
-
-                    if not is_alive:
-                        body_text = sb.get_text("body").lower()
-                        if "no active timer" in body_text or "back to dashboard" in body_text or "未找到活动" in body_text:
-                            self.log("[❌] 确认服务器真的停机了喵！")
-                            dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
-                            sb.save_screenshot(dead_screenshot)
-                            self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！", dead_screenshot)
-                            return
-                        else:
-                            self.log("[⚠️] 没看到倒计时，也没看到停机提示，继续强闯 CF 喵...")
-                    else:
-                        self.log("[✅] 确认看到倒计时啦！服务器存活喵！")
+                    self.log("[🔍] 正在核实服务器静态文本...")
+                    body_text = sb.get_text("body").lower()
+                    if "no active timer" in body_text or "back to dashboard" in body_text or "未找到活动" in body_text:
+                        self.log("[❌] 看到明确文字：确认服务器真的停机了喵！")
+                        dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
+                        sb.save_screenshot(dead_screenshot)
+                        self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！", dead_screenshot)
+                        return
 
                     cf_passed = False
                     for attempt in range(1, 4):
@@ -255,21 +241,20 @@ class FalixNodesRenewal:
                     self.log("[⏳] 正在让网页前端消化验证码 Token，强行冷静 3 秒...")
                     time.sleep(3)
 
-                    url = sb.get_current_url()
-                    if "login" in url or "google_vignette" in url:
-                        self.log(f"[⚠️] 警报！刚要点加时按钮，网址突变为 {url}！")
-                        if main_loop == 2:
-                            self.log("[❌] 两次都在关键时刻被踢，中止本次任务喵！")
-                            return
-                        else:
-                            self.log("[🔄] 绝不瞎点！立刻放弃当前进度，执行大循环彻底重头来过喵！")
-                            continue 
-
-                    self.log("[🕒] 正在捕获当前剩余时间...")
-                    before = get_time_safely(sb, timeout=15)
+                    # 🚨 终极拦截点：只有抓出数字，才敢继续点加时！🚨
+                    self.log("[🕒] 正在捕获当前剩余时间的数字...")
+                    before = get_time_safely(sb, timeout=20)
                     self.log(f"[🕒] 当前剩余时间: {before}")
 
-                    # ================= 智能解锁与点击 =================
+                    if before == "未知":
+                        self.log("[⚠️] 警报！时间数字未能加载出来（大概率是网络慢导致 API 没响应）！")
+                        if main_loop == 2:
+                            self.log("[❌] 两次大循环都加载不出时间，放弃本次执行，防止瞎点喵！")
+                            return
+                        else:
+                            self.log("[🔄] 绝不瞎点！放弃当前进度，执行大循环重新刷新重试喵！")
+                            continue
+
                     self.log("[⏳] 正在等待网页前端消化 Token，观察加时按钮是否自然解锁...")
                     btn_ready = False
                     for _ in range(12):  
@@ -299,7 +284,6 @@ class FalixNodesRenewal:
                             """)
                     except Exception as e:
                         self.log(f"[⚠️] 点击添加时间失败: {e}")
-                    # ==================================================
                     
                     self.log("[⏳] 正在乖乖等待 10 秒钟，让服务器消化加时请求...")
                     time.sleep(10) 
@@ -309,7 +293,7 @@ class FalixNodesRenewal:
                     time.sleep(8)
                     
                     self.log("[🕒] 正在捕获加时后的最新时间...")
-                    after = get_time_safely(sb, timeout=15)
+                    after = get_time_safely(sb, timeout=20)
                     self.log(f"[🕒] 最新剩余时间: {after}")
 
                     self.log("[✅] 全部流程执行完毕")
