@@ -24,7 +24,6 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
 # ===========================================
 
-# ========== 喵酱的无敌 Cloudflare 穿透模块 ==========
 def _unhide_turnstile(sb):
     try:
         sb.execute_script("""
@@ -113,7 +112,6 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
 
     return _turnstile_token_ready(sb)
 
-# ========== 动态时间捕手 ==========
 def get_time_safely(sb, timeout: int = 20) -> str:
     start = time.time()
     while time.time() - start < timeout:
@@ -129,7 +127,6 @@ def get_time_safely(sb, timeout: int = 20) -> str:
         except Exception: pass
         time.sleep(1)
     return "未知"
-# ==========================================
 
 class FalixNodesRenewal:
     def __init__(self):
@@ -160,7 +157,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 终极无死角眼见为实版喵")
+        self.log("[🚀] FalixNodes - 严密逻辑与原位抢救版喵")
         self.log("=" * 40)
         
         with SB(
@@ -203,28 +200,17 @@ class FalixNodesRenewal:
                             self.log("[🔄] 准备重新开启第二轮大循环喵...")
                             continue 
 
-                    # 🚨 把喵酱删掉的“眼见为实”防线重新请回来 🚨
-                    self.log("[🔍] 正在观察服务器运行状态...")
-                    is_alive = False
-                    try:
-                        # 必须先等 15 秒看倒计时框框出不出来
-                        sb.wait_for_element_visible("#timer-page-countdown", timeout=15)
-                        is_alive = True
-                    except Exception: pass
-
-                    if not is_alive:
-                        # 15 秒了连个框都没有，再去判断是不是停机文字
-                        body_text = sb.get_text("body").lower()
-                        if "no active timer" in body_text or "back to dashboard" in body_text or "未找到活动" in body_text:
-                            self.log("[❌] 确认服务器真的停机了喵！")
-                            dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
-                            sb.save_screenshot(dead_screenshot)
-                            self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！", dead_screenshot)
-                            return
-                        else:
-                            self.log("[⚠️] 没看到倒计时，也没看到停机提示，继续强闯 CF 喵...")
+                    self.log("[🔍] 正在扫描网页底层状态...")
+                    time.sleep(3)
+                    body_text = sb.get_text("body").lower()
+                    if "no active timer" in body_text or "back to dashboard" in body_text or "未找到活动" in body_text:
+                        self.log("[❌] 发现明确停机提示：确认服务器真的停机了喵！")
+                        dead_screenshot = f"{self.screenshot_dir}/server_dead.png"
+                        sb.save_screenshot(dead_screenshot)
+                        self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！", dead_screenshot)
+                        return
                     else:
-                        self.log("[✅] 确认看到倒计时啦！服务器存活喵！")
+                        self.log("[✅] 未发现停机提示，网页基础加载正常喵！")
 
                     cf_passed = False
                     for attempt in range(1, 4):
@@ -255,18 +241,25 @@ class FalixNodesRenewal:
                     self.log("[⏳] 正在让网页前端消化验证码 Token，强行冷静 3 秒...")
                     time.sleep(3)
 
-                    self.log("[🕒] 正在捕获当前剩余时间的数字...")
+                    self.log("[🕒] 正在向服务器请求真实倒计时数字...")
                     before = get_time_safely(sb, timeout=20)
-                    self.log(f"[🕒] 当前剩余时间: {before}")
-
+                    
+                    # 🚨 终极抢救机制：没加载出数字，强制 F5 抢救一次 🚨
                     if before == "未知":
-                        self.log("[⚠️] 警报！时间数字未能加载出来（大概率是网络慢导致 API 没响应）！")
-                        if main_loop == 2:
-                            self.log("[❌] 两次大循环都加载不出时间，放弃本次执行，防止瞎点喵！")
-                            return
-                        else:
-                            self.log("[🔄] 绝不瞎点！放弃当前进度，执行大循环重新刷新重试喵！")
-                            continue
+                        self.log("[⚠️] 警报！时间数字未能加载出来（API无响应），尝试原位 F5 抢救一下喵...")
+                        sb.refresh()
+                        time.sleep(8)
+                        before = get_time_safely(sb, timeout=15)
+                        
+                        if before == "未知":
+                            self.log("[❌] 抢救无效，彻底读不出真实数字！放弃瞎点，防止坏账喵！")
+                            if main_loop == 2:
+                                return
+                            else:
+                                self.log("[🔄] 准备执行大循环重置喵...")
+                                continue
+
+                    self.log(f"[🕒] 成功获取当前剩余时间: {before}")
 
                     self.log("[⏳] 正在等待网页前端消化 Token，观察加时按钮是否自然解锁...")
                     btn_ready = False
