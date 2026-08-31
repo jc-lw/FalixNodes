@@ -25,6 +25,7 @@ TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
 # ===========================================
 
 def _unhide_turnstile(sb):
+    """强行让被隐藏或缩小的 CF 框显形"""
     try:
         sb.execute_script("""
             document.querySelectorAll('iframe').forEach(function(f){
@@ -39,20 +40,25 @@ def _unhide_turnstile(sb):
     except Exception: pass
 
 def _turnstile_token_ready(sb) -> bool:
+    """严谨的 IIFE 闭包，防止底层环境吞报错"""
     try:
         token_ok = sb.execute_script("""
-            var inp = document.querySelector("input[name='cf-turnstile-response']");
-            return !!(inp && inp.value && inp.value.length > 20);
+            return (function() {
+                var inp = document.querySelector("input[name='cf-turnstile-response']");
+                return !!(inp && inp.value && inp.value.length > 20);
+            })();
         """)
         if token_ok: return True
     except Exception: pass
 
     try:
         success_visible = sb.execute_script("""
-            var s = document.getElementById('success');
-            if (!s) return false;
-            var style = window.getComputedStyle(s);
-            return style.display !== 'none' && style.visibility !== 'hidden';
+            return (function() {
+                var s = document.getElementById('success');
+                if (!s) return false;
+                var style = window.getComputedStyle(s);
+                return style.display !== 'none' && style.visibility !== 'hidden';
+            })();
         """)
         if success_visible: return True
     except Exception: pass
@@ -157,7 +163,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 严密逻辑与原位抢救版喵")
+        self.log("[🚀] FalixNodes - 智能防冷切完全体喵")
         self.log("=" * 40)
         
         with SB(
@@ -238,21 +244,21 @@ class FalixNodesRenewal:
                         self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 连续 3 次打勾超时！\n⚠️ 提示：您当前代理出口IP可能被CF拉黑，请尝试更换节点。", fail_screenshot)
                         return
 
-                    self.log("[⏳] 正在让网页前端消化验证码 Token，强行冷静 3 秒...")
-                    time.sleep(3)
+                    self.log("[⏳] 正在让网页前端消化验证码 Token，强行冷静 5 秒...")
+                    time.sleep(5)
 
                     self.log("[🕒] 正在向服务器请求真实倒计时数字...")
                     before = get_time_safely(sb, timeout=20)
                     
-                    # 🚨 终极抢救机制：没加载出数字，强制 F5 抢救一次 🚨
+                    # 🚨 终极抢救机制 🚨
                     if before == "未知":
                         self.log("[⚠️] 警报！时间数字未能加载出来（API无响应），尝试原位 F5 抢救一下喵...")
                         sb.refresh()
-                        time.sleep(8)
+                        time.sleep(10)
                         before = get_time_safely(sb, timeout=15)
                         
                         if before == "未知":
-                            self.log("[❌] 抢救无效，彻底读不出真实数字！放弃瞎点，防止坏账喵！")
+                            self.log("[❌] 抢救无效，读不出真实数字！放弃瞎点，防止坏账喵！")
                             if main_loop == 2:
                                 return
                             else:
@@ -261,9 +267,10 @@ class FalixNodesRenewal:
 
                     self.log(f"[🕒] 成功获取当前剩余时间: {before}")
 
+                    # ================= 智能解锁判断 =================
                     self.log("[⏳] 正在等待网页前端消化 Token，观察加时按钮是否自然解锁...")
                     btn_ready = False
-                    for _ in range(12):  
+                    for _ in range(15):  
                         try:
                             is_disabled = sb.execute_script("""
                                 return (function() {
@@ -278,18 +285,15 @@ class FalixNodesRenewal:
                         time.sleep(1)
 
                     self.log("[🖱️] 准备点击添加时间 (Addtime)...")
-                    try:
-                        if btn_ready:
-                            sb.execute_script("document.querySelector('#timer-page-btn').click();")
-                            self.log("[✅] 按钮已自然解锁，正常执行点击加时喵！")
-                        else:
-                            self.log("[⚠️] 按钮死活不解锁（大概率触发了冷却期），强行点一次碰运气喵...")
-                            sb.execute_script("""
-                                var btn = document.querySelector('#timer-page-btn');
-                                if(btn) { btn.removeAttribute('disabled'); btn.click(); }
-                            """)
-                    except Exception as e:
-                        self.log(f"[⚠️] 点击添加时间失败: {e}")
+                    if btn_ready:
+                        sb.execute_script("document.querySelector('#timer-page-btn').click();")
+                        self.log("[✅] 按钮已自然解锁，正常执行点击加时喵！")
+                    else:
+                        self.log("[⚠️] 按钮死活不解锁！大概率是剩余时间超过50分钟触发了官方冷却限制喵！")
+                        self.log("[⚠️] 为避免提交无效表单被封，本次放弃强行点击，保持当前时间退出喵。")
+                        self.send_telegram_notify(f"🛡️ FalixNodes 保活防打扰\n🖥️ 编号: {NUM}\n🕒 当前时间: {before}\nℹ️ 剩余时间充足，由于官方冷却限制，按钮未能解锁，本次跳过加时喵！")
+                        return
+                    # ==================================================
                     
                     self.log("[⏳] 正在乖乖等待 10 秒钟，让服务器消化加时请求...")
                     time.sleep(10) 
