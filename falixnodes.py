@@ -15,14 +15,18 @@ if "XAUTHORITY" not in os.environ:
 
 from seleniumbase import SB
 
+# ================= 配置区域 =================
 PROXY_URL = os.getenv("PROXY", "")
 NUM = os.getenv("NUM")
 TG_TOKEN = os.getenv("TG_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
 TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
+# ===========================================
 
+# ========== 时间字符串解析工具 ==========
 def parse_time_to_seconds(time_str: str) -> int:
+    """将获取到的文本时间转换为秒数，便于进行严格的大小比对"""
     if not time_str or time_str == "未知":
         return -1
     total_seconds = 0
@@ -38,13 +42,13 @@ def parse_time_to_seconds(time_str: str) -> int:
     
     return total_seconds
 
+# ========== 核心 CF 打勾逻辑 ==========
 def _turnstile_token_ready(sb) -> bool:
     try:
+        # 退回最原始稳定的多行提取写法
         token_ok = sb.execute_script("""
-            return (function() {
-                var inp = document.querySelector("input[name='cf-turnstile-response']");
-                return !!(inp && inp.value && inp.value.length > 20);
-            })();
+            var inp = document.querySelector("input[name='cf-turnstile-response']");
+            return inp && inp.value && inp.value.length > 20;
         """)
         if token_ok: return True
     except Exception: pass
@@ -70,6 +74,7 @@ def _try_click_turnstile(sb) -> bool:
             if (ts) ts.click();
         """)
     except Exception: pass
+
     return False
 
 def wait_turnstile(sb, timeout: int = 60) -> bool:
@@ -102,21 +107,22 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
 
     return _turnstile_token_ready(sb)
 
+# ========== 动态时间捕手 ==========
 def get_time_safely(sb, timeout: int = 15) -> str:
     start = time.time()
     while time.time() - start < timeout:
         try:
+            # 🚨 还原回您 16:44 成功抓取时间的完美多行代码 🚨
             raw_text = sb.execute_script("""
-                return (function() {
-                    var el = document.querySelector('#timer-page-countdown');
-                    return el ? (el.innerText || el.textContent).trim() : '';
-                })();
+                var el = document.querySelector('#timer-page-countdown');
+                return el ? (el.innerText || el.textContent).trim() : '';
             """)
             if raw_text and any(char.isdigit() for char in raw_text):
                 return raw_text
         except Exception: pass
         time.sleep(1)
     return "未知"
+# ==========================================
 
 class FalixNodesRenewal:
     def __init__(self):
@@ -147,7 +153,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 严谨时间校验 + Token冷静期版喵")
+        self.log("[🚀] FalixNodes - 大道至简原汁原味版喵")
         self.log("=" * 40)
         
         with SB(
@@ -246,11 +252,10 @@ class FalixNodesRenewal:
                     btn_ready = False
                     for _ in range(30):
                         try:
+                            # 🚨 抛弃单行报错写法，拆成多行安全写法 🚨
                             is_disabled = sb.execute_script("""
-                                return (function() {
-                                    var btn = document.querySelector('#timer-page-btn');
-                                    return btn ? btn.hasAttribute('disabled') : true;
-                                })();
+                                var btn = document.querySelector('#timer-page-btn');
+                                return btn ? btn.hasAttribute('disabled') : true;
                             """)
                             if not is_disabled:
                                 btn_ready = True
@@ -261,8 +266,6 @@ class FalixNodesRenewal:
                     if not btn_ready:
                         self.log("[⚠️] 按钮未自然解禁，可能是时间充足触发冷却，或者 Token 未被后端接受。放弃暴力强点。")
                     else:
-                        self.log("[⏳] 按钮已自然解锁！强制冷静 3 秒，让网页前端充分绑定 Token...")
-                        time.sleep(3)
                         self.log("[🖱️] 准备使用原生点击触发 Addtime...")
                         try:
                             sb.click("#timer-page-btn", timeout=5)
