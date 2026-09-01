@@ -24,9 +24,7 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 TAGET = f"https://client.falixnodes.net/timer?id={NUM}"
 # ===========================================
 
-# ========== 时间字符串解析工具 ==========
 def parse_time_to_seconds(time_str: str) -> int:
-    """将获取到的文本时间转换为秒数，便于进行严格的大小比对"""
     if not time_str or time_str == "未知":
         return -1
     total_seconds = 0
@@ -42,10 +40,8 @@ def parse_time_to_seconds(time_str: str) -> int:
     
     return total_seconds
 
-# ========== 核心 CF 打勾逻辑 ==========
 def _turnstile_token_ready(sb) -> bool:
     try:
-        # 退回最原始稳定的多行提取写法
         token_ok = sb.execute_script("""
             var inp = document.querySelector("input[name='cf-turnstile-response']");
             return inp && inp.value && inp.value.length > 20;
@@ -107,12 +103,18 @@ def wait_turnstile(sb, timeout: int = 60) -> bool:
 
     return _turnstile_token_ready(sb)
 
-# ========== 动态时间捕手 ==========
-def get_time_safely(sb, timeout: int = 15) -> str:
+# 🚨 强化版双重提取，等待时间拉长至 30 秒 🚨
+def get_time_safely(sb, timeout: int = 30) -> str:
     start = time.time()
     while time.time() - start < timeout:
         try:
-            # 🚨 还原回您 16:44 成功抓取时间的完美多行代码 🚨
+            if sb.is_element_visible("#timer-page-countdown"):
+                raw_text = sb.get_text("#timer-page-countdown").strip()
+                if raw_text and any(char.isdigit() for char in raw_text):
+                    return raw_text
+        except Exception: pass
+
+        try:
             raw_text = sb.execute_script("""
                 var el = document.querySelector('#timer-page-countdown');
                 return el ? (el.innerText || el.textContent).trim() : '';
@@ -120,9 +122,9 @@ def get_time_safely(sb, timeout: int = 15) -> str:
             if raw_text and any(char.isdigit() for char in raw_text):
                 return raw_text
         except Exception: pass
+        
         time.sleep(1)
     return "未知"
-# ==========================================
 
 class FalixNodesRenewal:
     def __init__(self):
@@ -153,7 +155,7 @@ class FalixNodesRenewal:
 
     def run(self):
         self.log("=" * 40)
-        self.log("[🚀] FalixNodes - 大道至简原汁原味版喵")
+        self.log("[🚀] FalixNodes - 无脑死磕 5 次重试版喵")
         self.log("=" * 40)
         
         with SB(
@@ -177,7 +179,8 @@ class FalixNodesRenewal:
                 except:
                     self.log("[⚠️] IP 检测跳过...")
                 
-                max_loops = 3
+                # 🚨 无脑重试 5 次 🚨
+                max_loops = 5
                 for main_loop in range(1, max_loops + 1):
                     self.log(f"\n[🌟] 开始第 {main_loop} 轮完整保活流程喵...")
                     
@@ -191,13 +194,12 @@ class FalixNodesRenewal:
                         if main_loop == max_loops:
                             self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 连续重定向，IP被风控喵！")
                             return
-                        else:
-                            continue 
+                        continue 
 
                     self.log("[🔍] 正在观察服务器运行状态...")
                     is_alive = False
                     try:
-                        sb.wait_for_element_visible("#timer-page-countdown", timeout=10)
+                        sb.wait_for_element_visible("#timer-page-countdown", timeout=15)
                         is_alive = True
                     except: pass
 
@@ -207,23 +209,22 @@ class FalixNodesRenewal:
                             self.log("[❌] 确认服务器真的停机了喵！")
                             self.send_telegram_notify(f"⚠️ FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：服务器已停机 (No active timer)，请手动开机喵！")
                             return
-                        else:
-                            self.log("[⚠️] 没看到倒计时和停机提示，尝试推进...")
+                        self.log("[⚠️] 没看到倒计时和停机提示，尝试推进...")
                     else:
                         self.log("[✅] 确认看到倒计时啦！")
 
-                    self.log("[🕒] 正在捕获加时前基准时间...")
-                    before = get_time_safely(sb, timeout=15)
+                    self.log("[🕒] 正在捕获加时前基准时间 (最长等待30秒)...")
+                    before = get_time_safely(sb, timeout=30)
                     
                     if before == "未知":
-                        self.log("[⚠️] 警报！初始时间未能加载出来，尝试原位 F5 抢救喵...")
+                        self.log("[⚠️] 警报！时间未能加载出来，原位 F5 抢救喵...")
                         sb.refresh()
                         time.sleep(10)
-                        before = get_time_safely(sb, timeout=15)
+                        before = get_time_safely(sb, timeout=30)
                         if before == "未知":
-                            self.log("[❌] 抢救无效！连初始时间都读不到。放弃本轮大循环！")
+                            self.log("[❌] 抢救无效！读不到初始时间，触发无脑重试进入下一轮！")
                             if main_loop == max_loops:
-                                self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：页面加载严重超时，无法读取时间数据喵！")
+                                self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：连续 {max_loops} 次加载严重超时，无法读取时间数据喵！")
                                 return
                             continue
 
@@ -244,7 +245,7 @@ class FalixNodesRenewal:
                     if not cf_passed:
                         self.log("[❌] 打勾失败，放弃当前大循环...")
                         if main_loop == max_loops:
-                            self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 打勾超时！")
+                            self.send_telegram_notify(f"🚨 FalixNodes 保活程序\n🖥️ 编号: {NUM}\n❌ 续费失败：Cloudflare 连续打勾超时！")
                             return
                         continue
 
@@ -252,7 +253,6 @@ class FalixNodesRenewal:
                     btn_ready = False
                     for _ in range(30):
                         try:
-                            # 🚨 抛弃单行报错写法，拆成多行安全写法 🚨
                             is_disabled = sb.execute_script("""
                                 var btn = document.querySelector('#timer-page-btn');
                                 return btn ? btn.hasAttribute('disabled') : true;
@@ -264,15 +264,19 @@ class FalixNodesRenewal:
                         time.sleep(1)
 
                     if not btn_ready:
-                        self.log("[⚠️] 按钮未自然解禁，可能是时间充足触发冷却，或者 Token 未被后端接受。放弃暴力强点。")
-                    else:
-                        self.log("[🖱️] 准备使用原生点击触发 Addtime...")
-                        try:
-                            sb.click("#timer-page-btn", timeout=5)
-                            self.log("[✅] 按钮点击完毕！")
-                        except Exception:
-                            sb.execute_script("document.querySelector('#timer-page-btn').click();")
-                            self.log("[✅] 按钮点击完毕 (JS Fallback)！")
+                        self.log("[⚠️] 按钮死活不解禁！触发下一轮重试！")
+                        if main_loop == max_loops:
+                            self.send_telegram_notify(f"🛡️ FalixNodes 保活防打扰\n🖥️ 编号: {NUM}\n🕒 当前时间: {before}\nℹ️ 官方冷却限制导致按钮未解锁，已达最大重试次数，跳过加时喵！")
+                            return
+                        continue
+                        
+                    self.log("[🖱️] 准备使用原生点击触发 Addtime...")
+                    try:
+                        sb.click("#timer-page-btn", timeout=5)
+                        self.log("[✅] 按钮点击完毕！")
+                    except Exception:
+                        sb.execute_script("document.querySelector('#timer-page-btn').click();")
+                        self.log("[✅] 按钮点击完毕 (JS Fallback)！")
 
                     self.log("[⏳] 正在等待 10 秒钟，让服务器消化加时请求...")
                     time.sleep(10) 
@@ -281,8 +285,8 @@ class FalixNodesRenewal:
                     sb.uc_open_with_reconnect(TAGET, reconnect_time=25)
                     time.sleep(8)
                     
-                    self.log("[🕒] 正在捕获加时后的最新时间...")
-                    after = get_time_safely(sb, timeout=15)
+                    self.log("[🕒] 正在捕获加时后的最新时间 (最长等待30秒)...")
+                    after = get_time_safely(sb, timeout=30)
                     after_sec = parse_time_to_seconds(after)
                     self.log(f"[🕒] 最新剩余时间: {after} ({after_sec}秒)")
 
@@ -293,13 +297,13 @@ class FalixNodesRenewal:
                         self.send_telegram_notify(f"🎉FalixNodes 保活程序\n🖥️编号: {NUM}\n🕒保活前: {before}\n🚀保活后: {after}", finish_screenshot)
                         break 
                     else:
-                        self.log(f"[❌] 虚假成功预警：时间并未增加 ({before} -> {after})！")
+                        self.log(f"[❌] 续费失败：时间并未增加 ({before} -> {after})！触发无脑重试...")
                         if main_loop == max_loops:
                             fail_screenshot = f"{self.screenshot_dir}/fail.png"
                             sb.save_screenshot(fail_screenshot)
-                            self.send_telegram_notify(f"❌续费失败\n🖥️编号: {NUM}\n⚠️ 未检测到服务器端时间增加，已停止误报成功。\n🕒保活前: {before}\n🚀保活后: {after}", fail_screenshot)
+                            self.send_telegram_notify(f"❌续费失败\n🖥️编号: {NUM}\n⚠️ 已连续重试 {max_loops} 次，时间未增加。\n🕒保活前: {before}\n🚀保活后: {after}", fail_screenshot)
                         else:
-                            self.log("[🔄] 准备进入下一轮大循环重试...")
+                            continue
 
             except Exception as e:
                 self.log(f"[❌] 运行异常: {e}")
